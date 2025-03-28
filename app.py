@@ -262,13 +262,16 @@ def index():
             else:
                  next_run_time_str = "Invalid Time"
 
+    is_running = scan_status["running"] # Read the boolean value from the global scan_status dict
+
     return render_template('index.html',
                            container_statuses=current_statuses,
                            scan_status=scan_status["last_run_status"],
                            next_scan_time=next_run_time_str,
                            timezone=str(display_timezone), # Pass timezone name string
                            available_models=models_list,
-                           current_model=selected_model)
+                           current_model=selected_model,
+			   scan_is_running=is_running)
 
 @app.route('/set_model', methods=['POST'])
 def set_model():
