@@ -5,8 +5,133 @@
     <title>Docker Log Monitor</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
-        /* ... (existing styles + responsive styles) ... */
-        /* Add style for the form if needed */
+        /* Basic styling */
+        body {
+            font-family: sans-serif;
+            line-height: 1.6;
+            margin: 0; /* Remove default margin */
+            padding: 10px; /* Add padding for smaller screens */
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        /* Add box-sizing globally */
+        *, *:before, *:after {
+            box-sizing: border-box;
+        }
+        .container {
+            background: #fff;
+            padding: 15px; /* Slightly reduce padding */
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 15px; /* Reduce margin */
+            max-width: 1200px; /* Optional: Max width for very large screens */
+            margin-left: auto; /* Center container */
+            margin-right: auto; /* Center container */
+        }
+        h1, h2 {
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            margin-top: 0; /* Adjust top margin */
+        }
+        pre {
+            background: #eee;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap; /* Ensures text wraps */
+            word-wrap: break-word; /* Ensures long words break */
+            font-size: 0.85em; /* Slightly smaller */
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+        }
+        .scan-info p { margin: 5px 0; font-size: 0.9em; color: #555; }
+
+        /* Container List Styles */
+        .container-list { list-style: none; padding: 0; }
+        .container-item {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            padding: 15px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            /* Add data-status styles */
+            border-left: 5px solid transparent; /* Default border */
+        }
+        /* Style based on data-status */
+        .container-item[data-status="pending"] { opacity: 0.8; border-left-color: #ffc107; }
+        .container-item[data-status*="error"] { border-left-color: #fd7e14; } /* Catches error_fetching_logs, error_analysis, etc. */
+        .container-item[data-status="unhealthy"] { border-left-color: #dc3545; }
+        .container-item[data-status="healthy"] { border-left-color: #28a745; }
+
+        .container-header {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap; /* Allow wrapping on small screens */
+            gap: 10px; /* Add gap between items */
+            margin-bottom: 10px;
+        }
+        .container-name {
+            font-weight: bold;
+            font-size: 1.1em;
+            word-break: break-all; /* Break long container names */
+        }
+        .container-id-short { /* Style for the short ID */
+            font-size: 0.85em;
+            color: #666;
+            word-break: keep-all; /* Prevent breaking ID */
+        }
+        .status-dot {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0; /* Prevent dot from shrinking */
+        }
+        /* Status dot colors */
+        .status-healthy { background-color: #28a745; box-shadow: 0 0 5px #28a745; }
+        .status-unhealthy { background-color: #dc3545; box-shadow: 0 0 5px #dc3545; }
+        .status-pending { background-color: #ffc107; box-shadow: 0 0 5px #ffc107; }
+        .status-error { background-color: #fd7e14; box-shadow: 0 0 5px #fd7e14; } /* Covers all error statuses */
+
+        .abnormality-details {
+             margin-top: 10px;
+             padding-top: 10px;
+             border-top: 1px dashed #eee;
+             /* Hide/show controlled by data-status attribute and CSS below */
+             display: none;
+        }
+        .container-item[data-status="unhealthy"] .abnormality-details,
+        .container-item[data-status*="error"] .abnormality-details {
+             display: block; /* Show details only for unhealthy/error */
+        }
+
+        .details-section { margin-bottom: 10px; }
+        .details-section strong { display: block; margin-bottom: 5px; color: #444; }
+        .manage-link {
+            font-size: 0.9em;
+            margin-left: auto; /* Pushes link to the right on wider screens */
+            padding: 3px 8px; /* Add some padding */
+            border: 1px solid #007bff;
+            color: #007bff;
+            text-decoration: none;
+            border-radius: 4px;
+            white-space: nowrap; /* Prevent button text wrapping */
+            /* Hide/show controlled by Jinja if block initially */
+        }
+        .manage-link:hover { background-color: #e7f3ff; }
+        .timestamp { font-size: 0.8em; color: #777; margin-top: 5px; display: block;}
+
+        /* Flash Messages */
+        .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .flash.info { background-color: #cce5ff; color: #004085; border: 1px solid #b8daff; }
+        .flash.warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+
+
+        /* Model Selector Form */
         .model-selector-form {
             display: flex;
             align-items: center;
@@ -17,9 +142,63 @@
             border-top: 1px solid #eee;
         }
         .model-selector-form label { font-weight: bold; }
-        .model-selector-form select { padding: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        .model-selector-form select { padding: 5px; border-radius: 4px; border: 1px solid #ccc; min-width: 150px; }
         .model-selector-form button { padding: 5px 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px;}
         .model-selector-form button:hover { background-color: #0056b3;}
+
+        /* Scan Running Indicator */
+        .scan-in-progress {
+            color: #0056b3;
+            font-size: 0.9em;
+            font-weight: bold;
+            background-color: #e7f3ff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+
+        /* --- Responsive Styles --- */
+        @media (max-width: 768px) {
+            body {
+                padding: 5px; /* Less padding on mobile */
+            }
+            .container {
+                padding: 10px;
+            }
+            h1 { font-size: 1.5em; }
+            h2 { font-size: 1.25em; }
+
+            .container-header {
+                 gap: 8px; /* Slightly reduce gap */
+            }
+            .container-name {
+                font-size: 1em; /* Slightly smaller name */
+                flex-grow: 1; /* Allow name to take available space */
+            }
+            .manage-link {
+                margin-left: 0; /* Remove auto margin */
+                margin-top: 5px; /* Add space if it wraps */
+                width: 100%; /* Make button full width if needed */
+                text-align: center; /* Center text in button */
+            }
+            pre {
+                 font-size: 0.8em; /* Even smaller pre text */
+            }
+            .model-selector-form select {
+                 min-width: 120px; /* Adjust dropdown width */
+            }
+        }
+
+        @media (max-width: 480px) {
+             .scan-info p { font-size: 0.85em; }
+             .container-name { font-size: 0.95em; }
+             .container-id-short { display: none; } /* Hide short ID on very small screens */
+             .model-selector-form { flex-direction: column; align-items: stretch; } /* Stack form elements */
+             .model-selector-form button { margin-top: 5px; }
+        }
+
     </style>
 </head>
 <body>
@@ -27,6 +206,11 @@
     <div class="container scan-info">
         <h1>Docker Container Health</h1>
         <p>Last Scan Status: {{ scan_status if scan_status else "Not run yet" }}</p>
+
+	{% if scan_is_running %}
+            <p class="scan-in-progress"><em>Scan currently in progress... (Page will refresh)</em></p>
+	{% endif %}
+
         <p>Next Scan scheduled around: {{ next_scan_time if next_scan_time else "N/A" }} (Times in {{ timezone }})</p>
 
          <!-- Display Flash Messages -->
