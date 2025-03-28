@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- ... (head content, styles - same as before) ... -->
+    <title>Docker Log Monitor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        /* ... (existing styles + responsive styles) ... */
+        /* Add style for the form if needed */
+        .model-selector-form {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #eee;
+        }
+        .model-selector-form label { font-weight: bold; }
+        .model-selector-form select { padding: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        .model-selector-form button { padding: 5px 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px;}
+        .model-selector-form button:hover { background-color: #0056b3;}
+    </style>
+</head>
+<body>
+    <!-- Section for Scan Info and Flash Messages -->
+    <div class="container scan-info">
+        <h1>Docker Container Health</h1>
+        <p>Last Scan Status: {{ scan_status if scan_status else "Not run yet" }}</p>
+        <p>Next Scan scheduled around: {{ next_scan_time if next_scan_time else "N/A" }} (Times in {{ timezone }})</p>
+
+         <!-- Display Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- === NEW: Model Selector Form === -->
+        <form method="POST" action="{{ url_for('set_model') }}" class="model-selector-form">
+            <label for="model-select">Ollama Model:</label>
+            <select name="selected_model" id="model-select">
+                {% if available_models %}
+                    {% for model_name in available_models %}
+                        <option value="{{ model_name }}" {% if model_name == current_model %}selected{% endif %}>
+                            {{ model_name }}
+                        </option>
+                    {% endfor %}
+                     {# Optionally add the current model even if not in list, maybe marked? #}
+                     {% if current_model not in available_models %}
+                         <option value="{{ current_model }}" selected>
+                             {{ current_model }} (Current - Not in last scan list)
+                         </option>
+                     {% endif %}
+                {% elif current_model %}
+                     {# Fallback if model list fetch failed but we know the current one #}
+                     <option value="{{ current_model }}" selected>{{ current_model }} (List unavailable)</option>
+                {% else %}
+                     <option value="" disabled selected>No models available</option>
+                {% endif %}
+            </select>
+            <button type="submit">Set Model</button>
+        </form>
+        <!-- === End Model Selector Form === -->
+
+    </div>
+
+    <!-- Section for the Container List -->
+    <div class="container">
+        <h2>Container Status</h2>
+        <!-- ... (The existing container list loop: {% if container_statuses %} ... {% endif %}) ... -->
+        {% if container_statuses %}
+            <ul class="container-list">
+                {% for container_id, data in container_statuses.items() %}
+                    <li class="container-item">
+                       {# ... header ... #}
+                        <div class="container-header">
+                            {# Status Dot #}
+                            {% if data.status == 'healthy' %}<span class="status-dot status-healthy" title="Healthy"></span>
+                            {% elif data.status == 'unhealthy' %}<span class="status-dot status-unhealthy" title="Unhealthy"></span>
+                            {% elif data.status == 'pending' %}<span class="status-dot status-pending" title="Scan Pending"></span>
+                            {% else %}<span class="status-dot status-error" title="{{ data.status | replace('_', ' ') | title }}"></span>
+                            {% endif %}
+                            {# Name and ID #}
+                            <span class="container-name">{{ data.name }}</span>
+                            <span class="container-id-short">({{ container_id[:12] }})</span>
+                            {# Manage Link #}
+                            {% if data.status == 'unhealthy' and data.db_id %}<a href="{{ url_for('manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a>{% endif %}
+                        </div>
+                       {# ... details ... #}
+                        {% if data.status == 'unhealthy' and data.details %}
+                        <div class="abnormality-details">
+                           {# ... analysis, snippet, timestamp ... #}
+                            <div class="details-section"><strong>Ollama Analysis:</strong> {{ data.details.analysis }}</div>
+                            <div class="details-section"><strong>Log Snippet:</strong><pre>{{ data.details.snippet }}</pre></div>
+                            <div class="details-section"><small>Detected/Updated: {{ data.details.timestamp.strftime('%Y-%m-%d %H:%M:%S') if data.details.timestamp else 'N/A' }}</small></div>
+                        </div>
+                        {% elif data.status != 'healthy' and data.status != 'pending' and data.details %}
+                         <div class="abnormality-details">
+                             <div class="details-section"><strong>Status Detail:</strong> {{ data.details.analysis }}</div>
+                             {% if data.details.snippet %}<div class="details-section"><strong>Log Snippet:</strong><pre>{{ data.details.snippet }}</pre></div>{% endif %}
+                         </div>
+                        {% endif %}
+                    </li>
+                {% endfor %} {# End of container loop #}
+            </ul>
+        {% else %}
+            <p>No running containers detected or initial scan pending.</p>
+        {% endif %} {# End of container_statuses check #}
+
+    </div>
+
+    <!-- ... (script tag - same as before) ... -->
+    <script>setTimeout(() => { window.location.reload(); }, 60000);</script>
+</body>
+</html>

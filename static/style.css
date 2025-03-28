@@ -1,0 +1,19 @@
+/* Example - Move styles from index.html here */
+body { font-family: sans-serif; line-height: 1.6; margin: 20px; background-color: #f4f4f4; }
+h1, h2 { color: #333; }
+.container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+th, td { border: 1px solid #ddd; padding: 10px; text-align: left; vertical-align: top;}
+th { background-color: #e9ecef; }
+tr:nth-child(even) { background-color: #f9f9f9; }
+pre { background: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.9em; max-height: 200px; overflow-y: auto; }
+.status-unresolved { color: red; font-weight: bold; }
+.status-resolved { color: green; }
+.status-ignored { color: orange; }
+.actions form { display: block; margin-bottom: 10px; } /* Stack forms vertically */
+.actions textarea { width: 95%; margin-top: 5px; box-sizing: border-box; height: 50px;}
+.actions button { padding: 5px 10px; cursor: pointer; margin-top: 5px;}
+.filter-nav { margin-bottom: 15px; }
+.filter-nav a { margin-right: 10px; text-decoration: none; color: #007bff; }
+.filter-nav a.active { font-weight: bold; text-decoration: underline; }
+td small { color: #666; font-size: 0.85em;}
