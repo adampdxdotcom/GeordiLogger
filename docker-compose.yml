@@ -18,7 +18,7 @@ services:
       - OLLAMA_API_URL=http://192.168.1.11:11434/api/generate
       # For Docker on Linux (use host IP or create a network, see notes):
       # - OLLAMA_API_URL=http://172.17.0.1:11434/api/generate
-      - OLLAMA_MODEL=gemma3:12b # Or your preferred model
+      - OLLAMA_MODEL=llama2-uncensored:7b # Or your preferred model
       - SCAN_INTERVAL_MINUTES=300
       - LOG_LINES_TO_FETCH=20
       - FLASK_SECRET_KEY=a_very_secret_and_unique_key_for_session_security # CHANGE THIS!
