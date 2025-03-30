@@ -174,6 +174,11 @@ def populate_initial_statuses():
                 else:
                     logging.error("CRITICAL: db.py does not have the required 'get_last_known_status' function. Cannot perform initial status population.")
                     last_status, db_id = 'error_db_lookup', None # Mark as error if function missing
+            except ValueError as unpack_err:
+                 # Handle the specific "too many values to unpack" error or similar issues
+                 logging.error(f"Error unpacking DB status return for {container_name[:12]}: {unpack_err}. Check db.get_abnormality_status return signature.")
+                 existing_status = 'db_error'
+                 db_id = None
             except Exception as db_lookup_err:
                 logging.error(f"Error calling db.get_last_known_status for {container_name[:12]}: {db_lookup_err}")
                 last_status, db_id = 'db_error', None
@@ -293,47 +298,134 @@ def scan_docker_logs():
             logs = analyzer.fetch_container_logs(container, num_lines=log_lines) # Pass log_lines setting
             if logs is None: current_scan_results[container_id].update({'status': 'error_fetching_logs', 'details': {'analysis': 'Failed logs', 'snippet': ''}}); continue
 
-            # Only analyze if Ollama URL is configured
+            # --- START: Integrated Code Block ---
+            # --- Analysis Block ---
             analysis_result = "NORMAL" # Default if no analysis performed
+            log_snippet = "" # Initialize snippet
+
             if ollama_url:
-                analysis_result = analyzer.analyze_logs_with_ollama(logs, model_to_use, custom_prompt=analysis_prompt)
+                try:
+                    # Assuming analyze_logs_with_ollama returns "NORMAL", "ERROR: <details>", or raises an Exception on true API failure
+                    logging.debug(f"Sending logs for {container_name[:12]} to Ollama model {model_to_use}...")
+                    analysis_result = analyzer.analyze_logs_with_ollama(logs, model_to_use, custom_prompt=analysis_prompt)
+                    logging.info(f"Ollama analysis result for {container_name[:12]}: {analysis_result[:150]}...") # Log the result received
+
+                    # Extract snippet regardless of result for potential logging/DB storage
+                    if analysis_result != "NORMAL":
+                         # Use the content after "ERROR:" as the snippet, or the whole result if prefix missing
+                         potential_snippet = analysis_result[len("ERROR:"):].strip() if analysis_result.startswith("ERROR:") else analysis_result
+                         log_snippet = analyzer.extract_log_snippet(potential_snippet, logs) # Refine snippet using context
+
+                except Exception as analysis_exception:
+                    logging.exception(f"Exception during Ollama analysis for {container_name[:12]}:")
+                    analysis_result = f"ANALYSIS_FAILED: {analysis_exception}" # Special internal status for true failure
             else:
                 logging.debug(f"Skipping Ollama analysis for {container_name[:12]} - URL not configured.")
+                analysis_result = "SKIPPED" # Indicate analysis was skipped due to config
 
+            # --- Result Processing Block ---
+            if analysis_result.startswith("ERROR:"):
+                # --- SUCCESSFUL ABNORMALITY DETECTION ---
+                found_issues_this_scan += 1
+                logging.warning(f"Abnormality detected by AI in {container_name[:12]}: {log_snippet}") # Use extracted snippet
 
-            if analysis_result != "NORMAL" and not analysis_result.startswith("ERROR:"):
-                log_snippet = analyzer.extract_log_snippet(analysis_result, logs)
                 # Check DB status for this specific abnormality
-                existing_status = db.get_abnormality_status(container_id, log_snippet) if hasattr(db, 'get_abnormality_status') else 'unknown'
+                existing_status = 'unknown'
+                db_id = None
+                # Ensure function exists before calling
+                if hasattr(db, 'get_abnormality_status'):
+                    try:
+                        existing_status, db_id = db.get_abnormality_status(container_id, log_snippet)
+                    except Exception as db_lookup_err:
+                        logging.error(f"Error checking DB status for {container_name[:12]} snippet: {db_lookup_err}")
+                        existing_status = 'db_error'
+                else:
+                    logging.error("DB function 'get_abnormality_status' missing.")
+                    existing_status = 'db_error'
+
 
                 if existing_status in ['resolved', 'ignored']:
-                    # Even if abnormality found, if it's resolved/ignored in DB, treat as healthy for dashboard
-                    current_scan_results[container_id].update({'status': 'healthy', 'db_id': None});
-                    logging.info(f"Abnormality found for {container_name[:12]} but marked '{existing_status}' in DB. Treating as healthy.")
-                    continue
+                    # Abnormality found, but already handled in DB. Treat as healthy for dashboard.
+                    current_scan_results[container_id].update({
+                        'status': 'healthy',
+                        'details': None, # Clear details
+                        'db_id': db_id # Keep link to the resolved/ignored record
+                    })
+                    logging.info(f"Detected abnormality for {container_name[:12]} matches a previously '{existing_status}' issue (ID: {db_id}). Treating as Healthy.")
+                elif existing_status == 'db_error':
+                     # Failed to check DB, mark as DB error status
+                     current_scan_results[container_id].update({
+                          'status': 'error_db_lookup',
+                          'details': {'analysis': analysis_result, 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
+                          'db_id': None
+                     })
+                else: # Unresolved or unknown/no history for this specific snippet
+                    # Log to DB and set status to unhealthy
+                    new_db_id = None
+                    try:
+                        if hasattr(db, 'add_or_update_abnormality'):
+                            new_db_id = db.add_or_update_abnormality(
+                                container_name=container_name,
+                                container_id=container_id,
+                                log_snippet=log_snippet,
+                                ollama_analysis=analysis_result # Store the full AI response
+                            )
+                            logging.info(f"Logged new/updated abnormality for {container_name[:12]} ID {new_db_id if new_db_id else 'N/A'}")
+                        else:
+                             logging.error("DB function 'add_or_update_abnormality' missing.")
+                             # Fall through to set status to db_error? Or just unhealthy without DB log? Let's mark db_error.
+                             existing_status = 'db_error' # Reuse variable to indicate DB logging failed
 
-                # Only log and add to DB if not resolved/ignored
-                found_issues_this_scan += 1; logging.warning(f"Abnormality detected: {container_name[:12]}: {analysis_result[:100]}...")
-                try:
-                    # Ensure function exists before calling
-                    if hasattr(db, 'add_or_update_abnormality') and hasattr(db, 'get_latest_unresolved_abnormality_id'):
-                        db.add_or_update_abnormality(container_name, container_id, log_snippet, analysis_result)
-                        db_id = db.get_latest_unresolved_abnormality_id(container_id, log_snippet)
-                        current_scan_results[container_id].update({'status': 'unhealthy', 'details': {'analysis': analysis_result, 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)}, 'db_id': db_id})
+                    except Exception as db_err:
+                         logging.error(f"DB Error logging abnormality for {container_name[:12]}: {db_err}")
+                         existing_status = 'db_error' # Reuse variable
+
+                    if existing_status == 'db_error':
+                         current_scan_results[container_id].update({
+                             'status': 'error_db_log',
+                             'details': {'analysis': analysis_result, 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
+                             'db_id': None
+                         })
                     else:
-                         logging.error("DB function 'add_or_update_abnormality' or 'get_latest_unresolved_abnormality_id' missing.")
-                         current_scan_results[container_id].update({'status': 'error_db_log', 'details': {'analysis': 'DB function missing', 'snippet': log_snippet}})
-                except Exception as db_err: logging.error(f"DB Error logging abnormality for {container_name[:12]}: {db_err}"); current_scan_results[container_id].update({'status': 'error_db_log', 'details': {'analysis': f'DB Error: {db_err}', 'snippet': log_snippet}})
-            elif analysis_result.startswith("ERROR:"):
-                logging.error(f"Analysis Error for {container_name[:12]}: {analysis_result}"); current_scan_results[container_id].update({'status': 'error_analysis', 'details': {'analysis': analysis_result, 'snippet': '(Analysis Failed)'}})
-            else: # NORMAL result (or skipped analysis)
-                # If the status was previously 'unhealthy' or 'awaiting_scan', now it's 'healthy'
-                if current_scan_results[container_id]['status'] != 'healthy':
-                    logging.info(f"{container_name[:12]} status changing to 'healthy'.")
-                current_scan_results[container_id]['status'] = 'healthy'
-                current_scan_results[container_id]['db_id'] = None # Ensure no stale DB ID if now healthy
-                current_scan_results[container_id]['details'] = None # Clear old details if healthy
-                logging.debug(f"{container_name[:12]} OK.")
+                         current_scan_results[container_id].update({
+                             'status': 'unhealthy',
+                             'details': {'analysis': analysis_result, 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
+                             'db_id': new_db_id # Link to the newly created/updated DB record
+                         })
+
+            elif analysis_result == "NORMAL" or analysis_result == "SKIPPED":
+                 # --- NORMAL or SKIPPED Analysis ---
+                 if current_scan_results[container_id]['status'] != 'healthy':
+                     logging.info(f"{container_name[:12]} status changing to 'healthy' (Result: {analysis_result}).")
+                 current_scan_results[container_id]['status'] = 'healthy'
+                 current_scan_results[container_id]['db_id'] = None # Ensure no stale DB ID if now healthy
+                 current_scan_results[container_id]['details'] = None # Clear old details if healthy
+                 logging.debug(f"{container_name[:12]} OK (Result: {analysis_result}).")
+
+            elif analysis_result.startswith("ANALYSIS_FAILED:"):
+                 # --- OLLAMA ANALYSIS FAILED ---
+                 logging.error(f"Analysis failed for {container_name[:12]}: {analysis_result}")
+                 current_scan_results[container_id].update({
+                     'status': 'error_analysis',
+                     'details': {'analysis': analysis_result, 'snippet': '(Analysis Failed)', 'timestamp': datetime.now(scan_timezone)},
+                     'db_id': None
+                 })
+            else:
+                 # --- UNEXPECTED AI RESPONSE FORMAT ---
+                 # AI responded, but not with "NORMAL" or "ERROR:" prefix
+                 logging.warning(f"Unexpected analysis format for {container_name[:12]}: {analysis_result[:150]}...")
+                 # Treat as potential abnormality but maybe use a different status or log differently?
+                 # For now, let's treat it like an abnormality was detected but format is off.
+                 # Reuse abnormality logic but maybe log a warning about format.
+                 log_snippet = analyzer.extract_log_snippet(analysis_result, logs) # Try to get snippet anyway
+                 # You could copy/adapt the 'ERROR:' handling block here, perhaps setting a specific status like 'unhealthy_format'
+                 # For simplicity now, let's log it and mark 'error_analysis'
+                 current_scan_results[container_id].update({
+                     'status': 'error_analysis', # Or a custom status?
+                     'details': {'analysis': f"Unexpected Format: {analysis_result}", 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
+                     'db_id': None
+                 })
+            # --- END: Integrated Code Block ---
 
 
         if not scan_cancelled: # Update global state
