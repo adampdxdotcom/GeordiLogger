@@ -264,9 +264,9 @@
 
             <div class="header-actions">
                 <!-- Settings Link -->
-                <a href="{{ url_for('settings') }}" class="header-link">Settings</a>
+                <a href="{{ url_for('ui.settings') }}" class="header-link">Settings</a>
                 <!-- Help Link -->
-                <a href="{{ url_for('help_page') }}" class="header-link">Help / Manual</a>
+                <a href="{{ url_for('ui.help_page') }}" class="header-link">Help / Manual</a>
                 <!-- Model selector form REMOVED from here -->
             </div>
         </div> <!-- End scan-info-header -->
@@ -342,7 +342,7 @@
 
                             {# Manage Link - Pushed right by margin-left: auto #}
                             {% if data.status == 'unhealthy' and data.db_id %}
-                                <a href="{{ url_for('manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a>
+                                <a href="{{ url_for('ui.manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a>
                             {% endif %}
                         </div> {# End container-header #}
 

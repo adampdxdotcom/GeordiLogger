@@ -32,7 +32,7 @@
 </head>
 <body>
     <div class="container">
-        <a href="{{ url_for('index') }}" class="back-link">« Back to Dashboard</a>
+        <a href="{{ url_for('ui.index') }}" class="back-link">« Back to Dashboard</a>
         <h1>Manage Abnormality</h1>
 
         <!-- Display Flash Messages -->
@@ -72,7 +72,7 @@
             <h2>Update Status & Notes</h2>
             <div class="actions">
                 {% if abnormality.status == 'unresolved' or abnormality.status == 'ignored' %}
-                <form method="POST" action="{{ url_for('manage_abnormality', abnormality_id=abnormality.id) }}">
+                <form method="POST" action="{{ url_for('ui.manage_abnormality', abnormality_id=abnormality.id) }}">
                     <input type="hidden" name="new_status" value="resolved">
                     <label for="notes_resolve">Resolution Notes:</label><br>
                     <textarea id="notes_resolve" name="notes" placeholder="Add resolution notes...">{{ abnormality.resolution_notes if abnormality.resolution_notes else '' }}</textarea><br>
@@ -81,7 +81,7 @@
                 {% endif %}
 
                 {% if abnormality.status == 'unresolved' or abnormality.status == 'resolved' %}
-                 <form method="POST" action="{{ url_for('manage_abnormality', abnormality_id=abnormality.id) }}">
+                 <form method="POST" action="{{ url_for('ui.manage_abnormality', abnormality_id=abnormality.id) }}">
                     <input type="hidden" name="new_status" value="ignored">
                     <label for="notes_ignore">Reason for Ignoring:</label><br>
                     <textarea id="notes_ignore" name="notes" placeholder="Reason for ignoring...">{{ abnormality.resolution_notes if abnormality.resolution_notes else '' }}</textarea><br>
@@ -90,7 +90,7 @@
                 {% endif %}
 
                  {% if abnormality.status != 'unresolved' %}
-                 <form method="POST" action="{{ url_for('manage_abnormality', abnormality_id=abnormality.id) }}">
+                 <form method="POST" action="{{ url_for('ui.manage_abnormality', abnormality_id=abnormality.id) }}">
                     <input type="hidden" name="new_status" value="unresolved">
                     <label for="notes_unresolve">Notes (Optional):</label><br>
                     <textarea id="notes_unresolve" name="notes" placeholder="Reason for reopening...">{{ abnormality.resolution_notes if abnormality.resolution_notes else '' }}</textarea><br>

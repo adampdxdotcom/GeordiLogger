@@ -77,7 +77,7 @@
 </head>
 <body>
     <div class="container">
-        <a href="{{ url_for('index') }}" class="back-link">« Back to Dashboard</a>
+        <a href="{{ url_for('ui.index') }}" class="back-link">« Back to Dashboard</a>
         <h1>Abnormality History</h1>
         <h2>{{ container_name }} <small style="color: #777;">({{ container_id[:12] }})</small></h2>
 
@@ -92,7 +92,7 @@
                                 </span>
                                 {# === NEW: Manage Link for Unresolved === #}
                                 {% if record.status == 'unresolved' %}
-                                    <a href="{{ url_for('manage_abnormality', abnormality_id=record.id) }}" class="manage-link-history">Manage Issue</a>
+                                    <a href="{{ url_for('ui.manage_abnormality', abnormality_id=record.id) }}" class="manage-link-history">Manage Issue</a>
                                 {% endif %}
                                 {# === END: Manage Link === #}
                             </div>

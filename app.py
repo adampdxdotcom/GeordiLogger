@@ -13,6 +13,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.base import JobLookupError
 import pytz
 import docker
+from routes.ui_routes import ui_bp
+from utils import get_display_timezone
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -25,12 +27,13 @@ try: import db; import analyzer
 except ImportError as e: logging.critical(f"Import Error: {e}"); exit(1)
 
 # --- Configuration ---
-SCHEDULER_TIMEZONE = os.environ.get("TZ", "America/Los_Angeles")
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change_this_in_production_please")
 if app.secret_key == "change_this_in_production_please": logging.warning("FLASK_SECRET_KEY is default.")
+app.register_blueprint(ui_bp)
+logging.info("Registered UI Blueprint")
 
 # --- Global State Variables ---
 container_statuses = {}; container_statuses_lock = Lock()
@@ -40,13 +43,6 @@ ai_health_summary = {"summary": "Summary generation pending...", "last_updated":
 app_settings = {}; settings_lock = Lock() # Populated by load_settings
 stop_scan_event = threading.Event()
 scheduler = BackgroundScheduler(daemon=True)
-
-# --- Helper Functions ---
-def get_display_timezone():
-    global SCHEDULER_TIMEZONE
-    try: return pytz.timezone(SCHEDULER_TIMEZONE)
-    except pytz.exceptions.UnknownTimeZoneError:
-        logging.warning(f"Invalid TZ '{SCHEDULER_TIMEZONE}'. Using UTC."); SCHEDULER_TIMEZONE = "UTC"; return pytz.utc
 
 # --- Settings Loader ---
 def load_settings():
@@ -413,337 +409,6 @@ def update_ai_health_summary():
              ai_health_summary["last_updated"] = summary_start_time
 
 
-# --- Flask UI Routes ---
-
-@app.route('/')
-def index():
-    display_timezone_obj = get_display_timezone()
-    with container_statuses_lock: current_statuses = container_statuses.copy()
-    with ai_summary_lock: current_summary = ai_health_summary.copy()
-    with settings_lock: current_color_settings = {k: v for k, v in app_settings.items() if k.startswith('color_')}
-    summary_last_updated_str = "Never"
-    if current_summary.get("last_updated"):
-         try: local_update_time = current_summary["last_updated"].astimezone(display_timezone_obj); summary_last_updated_str = local_update_time.strftime('%Y-%m-%d %H:%M:%S %Z')
-         except Exception: summary_last_updated_str = current_summary["last_updated"].strftime('%Y-%m-%d %H:%M:%S UTC')
-
-    job_state = 'unknown'; next_run_time_str = "N/A"; job = None; is_paused = False
-    try:
-        if scheduler.running:
-            job = scheduler.get_job('docker_log_scan_job')
-            if job:
-                if job.next_run_time is None: # This indicates a paused job in APScheduler
-                    is_paused = True
-                    job_state = 'paused'
-                    next_run_time_str = "Paused"
-                else:
-                    job_state = 'running' # Job exists and is scheduled
-                    # Use the globally updated scan_status first, fallback to job.next_run_time
-                    next_run_dt = scan_status.get("next_run_time")
-                    if isinstance(next_run_dt, datetime):
-                        next_run_time_str = next_run_dt.astimezone(display_timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z')
-                    else: # Fallback if scan_status is not updated yet
-                        next_run_time_str = job.next_run_time.astimezone(display_timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z')
-                        # Don't update scan_status here, let the scan job itself handle it
-            else:
-                job_state = 'stopped' # Scheduler running, but job not found
-                next_run_time_str = "Job Not Found"
-                # scan_status["next_run_time"] = None # Let scan job handle this
-        else:
-            job_state = 'scheduler_stopped'
-            next_run_time_str = "Scheduler Stopped"
-            # scan_status["next_run_time"] = None # Let scan job handle this
-
-    except Exception as e:
-        logging.error(f"Scheduler state error: {e}"); job_state = 'error'; next_run_time_str = "Error"
-        # scan_status["next_run_time"] = None # Let scan job handle this
-
-
-    return render_template('index.html', container_statuses=current_statuses, scan_status=scan_status["last_run_status"],
-                           next_scan_time=next_run_time_str, timezone=str(display_timezone_obj),
-                           scan_is_running=scan_status["running"], job_state=job_state, ai_summary=current_summary["summary"],
-                           ai_summary_last_updated=summary_last_updated_str, ai_summary_error=current_summary["error"],
-                           color_settings=current_color_settings)
-
-@app.route('/manage/<int:abnormality_id>', methods=['GET', 'POST'])
-def manage_abnormality(abnormality_id):
-    # Ensure DB function exists
-    if not hasattr(db, 'get_abnormality_by_id'):
-        flash("Database function 'get_abnormality_by_id' is missing.", 'error')
-        return redirect(url_for('index'))
-
-    abnormality = db.get_abnormality_by_id(abnormality_id)
-    if not abnormality: flash(f'Abnormality ID {abnormality_id} not found.', 'error'); return redirect(url_for('index'))
-
-    with settings_lock: current_color_settings = {k: v for k, v in app_settings.items() if k.startswith('color_')}
-
-    if request.method == 'POST':
-        new_status = request.form.get('new_status'); notes = request.form.get('notes', '').strip()
-        if new_status not in ['resolved', 'ignored', 'unresolved']:
-             flash('Invalid status selected.', 'error')
-             return render_template('manage.html', abnormality=abnormality, color_settings=current_color_settings)
-
-        # Ensure DB function exists
-        if not hasattr(db, 'update_abnormality_status'):
-             flash("Database function 'update_abnormality_status' is missing.", 'error')
-             return render_template('manage.html', abnormality=abnormality, color_settings=current_color_settings)
-
-        try:
-            success = db.update_abnormality_status(abnormality_id, new_status, notes if notes else None)
-        except Exception as e:
-             logging.error(f"Error updating abnormality status for ID {abnormality_id}: {e}")
-             flash('Database update failed.', 'error')
-             return render_template('manage.html', abnormality=abnormality, color_settings=current_color_settings)
-
-        if success:
-            flash(f'Abnormality status successfully updated to {new_status}.', 'success')
-            target_container_id = abnormality.get('container_id')
-            if target_container_id:
-                 with container_statuses_lock:
-                      if target_container_id in container_statuses:
-                           current_cont_data = container_statuses[target_container_id]
-                           current_cont_status = current_cont_data.get('status')
-                           # If user resolves/ignores the *specific* issue the dashboard shows, mark awaiting_scan
-                           if new_status in ['resolved', 'ignored'] and \
-                              current_cont_status == 'unhealthy' and \
-                              current_cont_data.get('db_id') == abnormality_id:
-                                current_cont_data['status'] = 'awaiting_scan'
-                                current_cont_data['db_id'] = None
-                                current_cont_data['details'] = None # Clear details when resolved/ignored
-                                logging.info(f"Set container {target_container_id[:12]} to 'awaiting_scan' after managing ID {abnormality_id}.")
-                           # If user marks it unresolved, ensure it's marked unhealthy on dashboard
-                           # (This primarily handles cases where it might have been 'awaiting_scan' or 'healthy')
-                           elif new_status == 'unresolved' and current_cont_status != 'unhealthy':
-                                current_cont_data['status'] = 'unhealthy'
-                                current_cont_data['db_id'] = abnormality_id # Link back to this issue
-                                # Re-fetch details if possible? Or maybe wait for next scan? For now, just set status.
-                                current_cont_data['details'] = abnormality # Store the abnormality data as details temporarily
-                                logging.info(f"Set container {target_container_id[:12]} back to 'unhealthy' after managing ID {abnormality_id}.")
-            return redirect(url_for('index'))
-        else:
-             flash('Database update failed (returned false).', 'error')
-             return render_template('manage.html', abnormality=abnormality, color_settings=current_color_settings)
-
-    # GET request
-    return render_template('manage.html', abnormality=abnormality, color_settings=current_color_settings)
-
-@app.route('/history/<string:container_id>')
-def container_history(container_id):
-    if not container_id or len(container_id) < 12: abort(404)
-    # Ensure DB function exists
-    if not hasattr(db, 'get_abnormalities_by_container'):
-        flash("Database function 'get_abnormalities_by_container' is missing.", 'error')
-        return redirect(url_for('index'))
-
-    try:
-        history_records = db.get_abnormalities_by_container(container_id)
-    except Exception as e:
-        logging.error(f"Error fetching history for container {container_id}: {e}")
-        flash("Error retrieving container history.", "error")
-        history_records = [] # Ensure template gets a list
-
-    container_name = history_records[0]['container_name'] if history_records else f"ID: {container_id[:12]}"
-    display_timezone_obj = get_display_timezone()
-    with settings_lock: current_color_settings = {k: v for k, v in app_settings.items() if k.startswith('color_')}
-    return render_template('history.html', records=history_records, container_name=container_name, container_id=container_id, timezone_obj=display_timezone_obj, color_settings=current_color_settings)
-
-@app.route('/help')
-def help_page():
-    """Displays the static help/manual page."""
-    logging.debug("Rendering help page.")
-    return render_template('help.html')
-
-@app.route('/settings', methods=['GET', 'POST'])
-def settings():
-    restart_required_settings = ['scan_interval_minutes', 'summary_interval_hours']
-    needs_restart_msg = False
-
-    # Ensure DB function exists before proceeding
-    if not hasattr(db, 'set_setting'):
-        flash("Database function 'set_setting' is missing. Cannot save settings.", 'error')
-        # Redirect or render differently if saving is impossible?
-        # For now, allow rendering but saving will fail.
-
-    if request.method == 'POST':
-        logging.info("Processing MAIN settings form update...")
-        form_data = request.form.to_dict(); new_settings = {}; validation_errors = []
-        expected_keys = list(db.DEFAULT_SETTINGS.keys())
-
-        for key in expected_keys:
-            if key == 'ignored_containers':
-                 ignored_list = request.form.getlist('ignored_containers')
-                 try: new_settings[key] = json.dumps(ignored_list)
-                 except Exception as e: validation_errors.append(f"Error processing ignore list: {e}")
-            elif key in form_data:
-                 value = form_data[key].strip()
-                 if key in ['scan_interval_minutes', 'summary_interval_hours', 'log_lines_to_fetch']:
-                     try: int_val = int(value); assert int_val > 0; new_settings[key] = str(int_val)
-                     except: validation_errors.append(f"Invalid positive integer for {key.replace('_',' ')}.")
-                     else: # Check restart needed only if validation passes
-                          with settings_lock:
-                               # Use str() comparison to handle potential type differences
-                               if key in restart_required_settings and str(app_settings.get(key)) != str(int_val): needs_restart_msg = True
-                 elif key.startswith('color_'):
-                     if not value.startswith('#') or len(value) not in [4, 7]: # Allow #rgb and #rrggbb
-                        validation_errors.append(f"Invalid color format for {key.replace('_', ' ').title()}. Use #rgb or #rrggbb.")
-                     else: # Check hex validity
-                          hex_part = value[1:]
-                          if len(hex_part) == 3: hex_part = "".join(c*2 for c in hex_part) # Expand #rgb to #rrggbb for validation
-                          try: int(hex_part, 16); new_settings[key] = value # Store original value (#rgb or #rrggbb)
-                          except ValueError: validation_errors.append(f"Invalid hex color value for {key.replace('_', ' ').title()}.")
-                 elif key == 'ollama_api_url':
-                     if value and not value.startswith(('http://', 'https://')): # Allow empty URL
-                         validation_errors.append("Ollama URL must start http:// or https:// (or be empty)")
-                     elif value and not value.endswith(("/api/generate", "/api/chat")):
-                          validation_errors.append("Ollama URL should typically end with /api/generate or /api/chat")
-                     else: new_settings[key] = value
-                 elif key == 'api_key': new_settings[key] = value # Allow empty
-                 else: new_settings[key] = value # Model, Prompt
-
-        # --- After validation loop ---
-        if validation_errors:
-            for error in validation_errors: flash(error, 'error')
-            # Need to repopulate data for rendering template with errors
-            with settings_lock: current_display_settings = app_settings.copy()
-            with container_statuses_lock: running_names = {d['name'] for d in container_statuses.values()}
-            # Use the *current* value from cache/DB for ignored list, not from failed form data
-            ignored_list_display = current_display_settings.get('ignored_containers_list', [])
-            all_names_display = sorted(list(running_names.union(set(ignored_list_display))))
-            with models_lock: current_models = list(available_ollama_models)
-            # Use submitted form data (potentially invalid) for repopulating the form
-            form_values_to_render = request.form.to_dict(flat=False) # Use flat=False for ignored_containers list
-            form_values_to_render['ignored_containers'] = request.form.getlist('ignored_containers') # Ensure list format
-            # Ensure other fields are single values if they came back as lists
-            for k, v in form_values_to_render.items():
-                if isinstance(v, list) and k != 'ignored_containers':
-                    form_values_to_render[k] = v[0] if v else ''
-            # Make sure the settings dict passed to render still has all keys
-            for k in expected_keys:
-                 if k not in form_values_to_render: form_values_to_render[k] = current_display_settings.get(k, '')
-
-            return render_template('settings.html', settings=form_values_to_render, available_models=current_models, all_container_names=all_names_display, ignored_container_list=form_values_to_render['ignored_containers'])
-
-        else:
-             # Save validated settings only if db function exists
-             save_success = True; failed_key = None
-             settings_actually_changed = False # Track if anything needed saving
-             if hasattr(db, 'set_setting'):
-                 with settings_lock:
-                     for key, value in new_settings.items():
-                         # Only save if value actually changed
-                         current_value = app_settings.get(key)
-                         # Special handling for ignored_containers JSON string vs list comparison
-                         if key == 'ignored_containers':
-                             current_list = app_settings.get('ignored_containers_list', [])
-                             try:
-                                 new_list_from_json = json.loads(value)
-                                 # Compare content as sets to ignore order
-                                 if set(current_list) != set(new_list_from_json):
-                                     logging.info(f"Attempting to save changed setting: {key}")
-                                     if db.set_setting(key, value):
-                                         app_settings[key] = value # Update cache (JSON string)
-                                         app_settings['ignored_containers_list'] = new_list_from_json # Update derived list
-                                         settings_actually_changed = True
-                                     else:
-                                         save_success = False; failed_key = key
-                                         logging.error(f"DB save failed for key: '{key}'")
-                                         flash(f"Error saving setting: '{key.replace('_', ' ').title()}'", 'error')
-                                         break # Stop saving if one fails
-                                 else:
-                                     logging.debug(f"Skipping save for unchanged setting: {key}")
-                             except json.JSONDecodeError:
-                                 logging.error(f"Internal error: Failed to re-decode validated JSON for comparison: {value}")
-                                 # Should not happen if validation passed, but good to log
-
-                         # Normal comparison for other keys (use str() for safety)
-                         elif str(current_value) != str(value):
-                              logging.info(f"Attempting to save changed setting: {key}")
-                              if db.set_setting(key, value):
-                                   app_settings[key] = value # Update cache
-                                   # Update derived/typed values in cache
-                                   if key in ['scan_interval_minutes','summary_interval_hours','log_lines_to_fetch']:
-                                       try: app_settings[key] = int(value)
-                                       except ValueError: logging.error(f"Failed to convert {key}={value} to int after saving.")
-                                   # Update analyzer config directly
-                                   if key == 'ollama_api_url': analyzer.OLLAMA_API_URL = value
-                                   if key == 'ollama_model': analyzer.DEFAULT_OLLAMA_MODEL = value
-                                   if key == 'log_lines_to_fetch':
-                                       try: analyzer.LOG_LINES_TO_FETCH = int(value)
-                                       except ValueError: logging.error(f"Failed to update analyzer.LOG_LINES_TO_FETCH with {value}")
-                                   settings_actually_changed = True
-                              else:
-                                  save_success = False; failed_key = key
-                                  logging.error(f"DB save failed for key: '{key}'")
-                                  flash(f"Error saving setting: '{key.replace('_', ' ').title()}'", 'error')
-                                  break # Stop saving if one fails
-                         else:
-                              logging.debug(f"Skipping save for unchanged setting: {key}")
-             else:
-                  # This case should be rare if the check at the start of the function works
-                  flash("Database function 'set_setting' is missing. Settings cannot be saved.", 'error')
-                  save_success = False
-
-
-             # Flash messages outside the lock
-             if save_success:
-                 if settings_actually_changed:
-                     flash("Settings saved successfully.", 'success')
-                 else:
-                     flash("No settings were changed.", 'info')
-             # else: # Error message already flashed if needed
-
-             if needs_restart_msg and settings_actually_changed: # Only show restart if intervals actually changed
-                 flash("Interval changes require an application restart to take effect.", 'warning')
-
-             # Redirect after attempting save
-             return redirect(url_for('settings'))
-
-    else: # GET Request
-        with settings_lock: current_settings_display = app_settings.copy()
-        logging.info(f"Rendering settings page via GET request.")
-        key_to_log = current_settings_display.get('api_key', 'Not Set or Empty')
-        # Ensure settings used by template have correct types/derived values
-        current_settings_display['ignored_containers_list'] = current_settings_display.get('ignored_containers_list', [])
-        with container_statuses_lock: running_names = {d['name'] for d in container_statuses.values()}
-        ignored_list_display = current_settings_display.get('ignored_containers_list', [])
-        all_names_display = sorted(list(running_names.union(set(ignored_list_display))))
-        # Fetch models if Ollama URL is set, otherwise keep empty
-        with models_lock: current_models_display = list(available_ollama_models)
-        if not current_settings_display.get('ollama_api_url'):
-            current_models_display = [] # Don't show models if URL not set
-
-        # Ensure all default keys are present in the dict passed to the template
-        for k, default_val in db.DEFAULT_SETTINGS.items():
-             if k not in current_settings_display:
-                 current_settings_display[k] = default_val
-
-        return render_template('settings.html', settings=current_settings_display, available_models=current_models_display, all_container_names=all_names_display, ignored_container_list=ignored_list_display)
-
-
-@app.route('/settings/regenerate_api_key', methods=['POST'])
-def regenerate_api_key():
-    # Ensure DB function exists
-    if not hasattr(db, 'set_setting'):
-        flash("Database function 'set_setting' is missing. Cannot regenerate API key.", 'error')
-        return redirect(url_for('settings'))
-
-    new_key = secrets.token_urlsafe(32)
-    logging.info(f"Regenerating API key route hit. New key generated (starts with: {new_key[:4]}...).")
-    try:
-        save_ok = db.set_setting('api_key', new_key)
-    except Exception as e:
-        logging.error(f"Error saving regenerated API key: {e}")
-        save_ok = False
-
-    if save_ok:
-         with settings_lock: app_settings['api_key'] = new_key
-         logging.info(f"Regenerate: API key updated in DB and cache. Cache now ends with: ...{app_settings.get('api_key', 'ERROR')[-4:]}")
-         flash("API Key successfully regenerated!", 'success') # Distinct message
-    else:
-         logging.error("Regenerate: Failed to save new API key to database.")
-         flash("Error: Failed to save regenerated API key to database.", 'error')
-    logging.info("Regenerate: Redirecting back to settings page...")
-    return redirect(url_for('settings'))
-
 # --- Scheduler Control Routes ---
 @app.route('/pause_schedule', methods=['POST'])
 def pause_schedule():
@@ -758,7 +423,7 @@ def pause_schedule():
         else: flash("Scheduler not running.", "warning")
     except JobLookupError: flash("Job 'docker_log_scan_job' not found to pause.", "warning")
     except Exception as e: logging.error(f"Error pausing schedule: {e}"); flash(f"Error pausing schedule: {e}", "error")
-    finally: return redirect(url_for('index'))
+    finally: return redirect(url_for('ui.index'))
 
 @app.route('/resume_schedule', methods=['POST'])
 def resume_schedule():
@@ -778,13 +443,13 @@ def resume_schedule():
         else: flash("Scheduler not running.", "warning")
     except JobLookupError: flash("Job 'docker_log_scan_job' not found to resume.", "warning")
     except Exception as e: logging.error(f"Error resuming schedule: {e}"); flash(f"Error resuming schedule: {e}", "error")
-    finally: return redirect(url_for('index'))
+    finally: return redirect(url_for('ui.index'))
 
 @app.route('/stop_current_scan', methods=['POST'])
 def stop_current_scan():
     if scan_status["running"]: stop_scan_event.set(); flash("Stop signal sent to running scan.", "info");
     else: flash("No scan is currently running.", "info");
-    return redirect(url_for('index'))
+    return redirect(url_for('ui.index'))
 
 @app.route('/trigger_scan', methods=['POST'])
 def trigger_scan():
@@ -796,7 +461,7 @@ def trigger_scan():
             scan_thread.start()
             logging.info(f"Manual log scan triggered directly via UI."); flash("Manual scan triggered.", "success")
     except Exception as outer_e: logging.error(f"Unexpected error in trigger_scan route: {outer_e}"); flash("An unexpected error occurred while triggering scan.", "error")
-    finally: return redirect(url_for('index'))
+    finally: return redirect(url_for('ui.index'))
 
 @app.route('/trigger_summary', methods=['POST'])
 def trigger_summary():
@@ -806,7 +471,7 @@ def trigger_summary():
         summary_thread.start()
         logging.info(f"Manual AI summary triggered directly via UI."); flash("Manual summary triggered.", "success")
     except Exception as outer_e: logging.error(f"Unexpected error in trigger_summary route: {outer_e}"); flash("An unexpected error occurred while triggering summary.", "error")
-    finally: return redirect(url_for('index'))
+    finally: return redirect(url_for('ui.index'))
 
 # --- API Endpoints ---
 @app.route('/api/status', methods=['GET'])
@@ -959,6 +624,21 @@ if __name__ == '__main__':
         load_settings() # Load settings from DB
         populate_initial_statuses() # <-- Call added here
         setup_scheduler() # Setup and start background jobs
+   # --- Attach shared state/objects directly to the app instance ---
+        app.app_settings = app_settings
+        app.settings_lock = settings_lock
+        app.container_statuses = container_statuses
+        app.container_statuses_lock = container_statuses_lock
+        app.scan_status = scan_status
+        app.stop_scan_event = stop_scan_event # Attach event object
+        app.ai_health_summary = ai_health_summary
+        app.ai_summary_lock = ai_summary_lock
+        app.available_ollama_models = available_ollama_models
+        app.models_lock = models_lock
+        app.scheduler = scheduler # Attach scheduler instance
+        logging.info("Attached shared state to Flask app object.")
+        app.analyzer = analyzer
+    # --- End attaching state ---
 
     except Exception as startup_err:
          logging.critical(f"Critical error during application startup: {startup_err}", exc_info=True)

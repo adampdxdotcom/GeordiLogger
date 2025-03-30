@@ -6,7 +6,7 @@
     <title>Settings - Geordi Log Monitor</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
-        /* --- Keep all your existing styles --- */
+        /* Basic styling */
         body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
         *, *:before, *:after { box-sizing: border-box; }
         .container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; max-width: 900px; margin-left: auto; margin-right: auto; }
@@ -14,35 +14,58 @@
         h1 { margin-top: 0; }
         .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; font-size: 0.9em; }
         .back-link:hover { text-decoration: underline; }
+
+        /* Form Styling */
         .form-group { margin-bottom: 1.5rem; }
         label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
-        .form-control, select.form-control, textarea.form-control { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95em; background-color: #fff; }
+        .form-control, select.form-control, textarea.form-control {
+            width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95em;
+            background-color: #fff; /* Ensure background for readonly */
+        }
         textarea.form-control { min-height: 150px; font-family: monospace; line-height: 1.4; }
         select[multiple].form-control { min-height: 150px; }
         input[type="color"].form-control { padding: 0; height: 38px; width: 60px; border: 1px solid #ccc; border-radius: 4px; vertical-align: middle; }
         .color-setting label { display: inline-block !important; width: auto !important; margin-right: 10px; font-weight: normal; }
         .color-setting { margin-bottom: 10px; }
         .help-text { font-size: 0.85em; color: #666; margin-top: 5px; }
-        .button { display: inline-block; padding: 10px 15px; font-size: 1em; font-weight: normal; text-align: center; text-decoration: none; cursor: pointer; border: 1px solid transparent; border-radius: 4px; background-color: #007bff; color: white; transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out; }
+
+        /* Buttons */
+        .button { display: inline-block; padding: 10px 15px; font-size: 1em; font-weight: normal;
+            text-align: center; text-decoration: none; cursor: pointer;
+            border: 1px solid transparent; border-radius: 4px;
+            background-color: #007bff; color: white;
+            transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+         }
         .button:hover { filter: brightness(90%); }
-        .button-success { background-color: #28a745; border-color: #28a745; color: white; }
+        .button-success { background-color: #28a745; border-color: #28a745; color: white; } /* Green */
         .button-success:hover { background-color: #218838; border-color: #1e7e34;}
-        .button-secondary { background-color: #6c757d; border-color: #6c757d; color: white; }
+        .button-secondary { background-color: #6c757d; border-color: #6c757d; color: white; } /* Grey/Blue */
         .button-secondary:hover { background-color: #5a6268; border-color: #545b62;}
-        .button-warning { background-color: #ffc107; border-color: #ffc107; color: #212529; }
+        .button-warning { background-color: #ffc107; border-color: #ffc107; color: #212529; } /* Yellow */
         .button-warning:hover { background-color: #e0a800; border-color: #d39e00; }
         .button-small { padding: 5px 10px; font-size: 0.85em; }
-        .api-section { border-bottom: 1px solid #eee; padding-bottom: 1rem; margin-bottom: 1.5rem; } /* Style for top section */
-        .api-key-display-group { display: flex; align-items: center; gap: 10px; }
+
+        /* API Key Specific Styling */
+        .api-section { margin-top: 1.5rem; border-top: 1px solid #eee; padding-top: 1rem; } /* Wrapper div */
+        .api-key-display-group { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; /* Reduced margin */ }
         .api-key-display-group input[type="text"].form-control { flex-grow: 1; background-color: #e9ecef; font-family: monospace; }
         .copy-button { white-space: nowrap; }
-        .api-key-action-section { padding-top: 10px; } /* Space for regenerate button */
+        .api-key-action-section { padding-top: 5px; } /* Controls space for regenerate button */
+
+
+        /* Flash Messages */
         .flash { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; }
         .flash.success { color: #155724; background-color: #d4edda; border-color: #c3e6cb; }
-        .flash.error { color: #721c24; background-color: #f8d7da; border-color: #f5c6cb; }
-        .flash.info { color: #0c5460; background-color: #d1ecf1; border-color: #bee5eb; }
-        .flash.warning { color: #856404; background-color: #fff3cd; border-color: #ffeeba; }
-        @media (max-width: 600px) { .container { padding: 15px; } h1 { font-size: 1.5em; } .api-key-display-group { flex-direction: column; align-items: stretch; gap: 5px;} .copy-button { margin-top: 5px; text-align: center; } .api-key-action-section .api-key-regen-form { display: block; margin-bottom: 5px; } .api-key-action-section .button-success { width: 100%; } }
+        /* ... other flash styles ... */
+
+        @media (max-width: 600px) { /* Keep mobile styles */
+            .container { padding: 15px; }
+            h1 { font-size: 1.5em; }
+            .api-key-display-group { flex-direction: column; align-items: stretch; gap: 5px;}
+            .copy-button { margin-top: 5px; text-align: center; }
+            .api-key-action-section .api-key-regen-form { display: block; margin-bottom: 5px; }
+            .api-key-action-section .button-success { width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -59,44 +82,13 @@
             {% endif %}
         {% endwith %}
 
-        <!-- === API Key Section (Top - Separate from Main Form Below) === -->
-        <div class="api-section">
-            <h3>API Configuration</h3>
-            <div class="form-group">
-                <label for="api_key_display">Current API Key:</label>
-                <div class="api-key-display-group">
-                    <!-- Readonly display field - ID changed slightly for clarity -->
-                    <!-- NO name attribute needed here -->
-                    <input type="text" id="api_key_display" class="form-control" readonly
-                           value="{{ settings.get('api_key', '') }}" placeholder="No key set. Use 'Regenerate' button.">
-                    <button type="button" class="button button-small copy-button" id="copyApiKeyButton" onclick="copyApiKey()">Copy Key</button>
-                </div>
-                 <p class="help-text">Read-only display. Regenerate button below creates/replaces the key.</p>
-            </div>
-            <!-- Regenerate Action Section (Contains its own form) -->
-            <div class="api-key-action-section">
-                 <!-- Independent form for the regenerate action -->
-                 <form method="POST" action="{{ url_for('ui.regenerate_api_key') }}" class="api-key-regen-form" style="display: inline-block;">
-                    <button type="submit" class="button button-success"
-                            onclick="return confirm('Are you sure you want to regenerate the API key?\nAny existing integrations using the old key will stop working immediately.');">
-                        Regenerate New Key
-                    </button>
-                 </form>
-                 <p class="help-text" style="display: inline-block; margin-left: 10px;">Instantly generates and saves a new random API key.</p>
-             </div>
-        </div>
-        <!-- === End API Key Section === -->
-
-
         <!-- === Main Settings Form START === -->
-        <!-- This form now excludes API key management -->
         <form id="settings-form" method="post" action="{{ url_for('ui.settings') }}" class="settings-form">
-            <h2 style="margin-top: 2rem; margin-bottom: 1.5rem;">Core Configuration</h2>
+            <h2 style="margin-bottom: 1.5rem;">Main Configuration</h2>
 
             <!-- --- Ollama Settings --- -->
             <h3>Ollama Configuration</h3>
             <!-- ... (Ollama URL, Model Select, Prompt Textarea + Copy/Clear buttons) ... -->
-            <!-- These inputs NEED name attributes -->
              <div class="form-group">
                  <label for="ollama_api_url">Ollama API Base URL:</label>
                  <input type="url" id="ollama_api_url" name="ollama_api_url" class="form-control" value="{{ settings.get('ollama_api_url', '') }}" required placeholder="e.g., http://192.168.1.100:11434">
@@ -111,12 +103,10 @@
                         <option value="{{ model }}" {% if settings.get('ollama_model') == model %}selected{% endif %}>{{ model }}</option>
                         {% endfor %}
                         <option value="" disabled>---</option>
-                        {% if settings.get('ollama_model') %}
-                            {% if settings.get('ollama_model') not in available_models %}
+                        {% if settings.get('ollama_model') and settings.get('ollama_model') not in available_models %}
                             <option value="{{ settings.get('ollama_model') }}" selected>(Current/Manual: {{ settings.get('ollama_model') }})</option>
-                            {% else %}
-                             <option value="{{ settings.get('ollama_model') }}" selected>(Current: {{ settings.get('ollama_model') }})</option>
-                            {% endif %}
+                         {% elif settings.get('ollama_model') %}
+                            <option value="{{ settings.get('ollama_model') }}" selected>(Current: {{ settings.get('ollama_model') }})</option>
                         {% endif %}
                     {% else %}
                          {% if settings.get('ollama_model') %}
@@ -174,7 +164,6 @@
                 <p class="help-text">Frequency of AI health summary generation (hours). Requires app restart.</p>
             </div>
 
-
             <!-- --- UI Colors --- -->
             <h3>Appearance</h3>
             <!-- ... (Color pickers) ... -->
@@ -183,7 +172,7 @@
                 <label for="color_healthy">Healthy:</label>
                 <input type="color" id="color_healthy" name="color_healthy" class="form-control" value="{{ settings.get('color_healthy', '#28a745') }}">
             </div>
-             <div class="color-setting">
+            <div class="color-setting">
                 <label for="color_unhealthy">Unhealthy:</label>
                 <input type="color" id="color_unhealthy" name="color_unhealthy" class="form-control" value="{{ settings.get('color_unhealthy', '#dc3545') }}">
             </div>
@@ -197,23 +186,51 @@
             </div>
             <p class="help-text">Customize status indicator colors used on the dashboard.</p>
 
+            <!-- === API Key Section START (Still inside main form) === -->
+            <div class="api-section">
+                <h3>API Configuration</h3>
+                <div class="form-group">
+                    <label for="api_key">Current API Key:</label>
+                    <div class="api-key-display-group">
+                        <!-- Readonly display field -->
+                        <input type="text" id="api_key" name="api_key" class="form-control" readonly value="{{ settings.get('api_key', '') }}" placeholder="No key set. Use 'Regenerate' button.">
+                        <button type="button" class="button button-small copy-button" id="copyApiKeyButton" onclick="copyApiKey()">Copy Key</button>
+                    </div>
+                     <p class="help-text">Read-only display. Use 'Regenerate' button below to create/replace.</p>
+                     <!-- Regenerate Button / Form will be placed *after* this main form closes -->
+                </div>
+            </div>
+            <!-- === API Key Section END === -->
 
-            <!-- --- Submit Button for Main Form --- -->
+
+            <!-- --- Submit Button for Main Form (LAST element inside main form) --- -->
             <div class="form-group" style="margin-top: 2rem; border-top: 1px solid #eee; padding-top: 1.5rem;">
                 <button type="submit" class="button button-secondary">Save All Settings</button>
-                <p class="help-text" style="display: inline-block; margin-left: 15px;">Saves Core Configuration options (Ollama, Scan, Summary, Appearance).</p>
+                <p class="help-text" style="display: inline-block; margin-left: 15px;">Saves all configuration options set above.</p>
             </div>
 
-        </form>
-        <!-- === Main Settings Form END === -->
+        </form> <!-- === Main Settings Form END === -->
+
+
+        <!-- === Regenerate Action Section (Placed AFTER main form, but visually follows API section) === -->
+        <div class="api-key-action-section">
+             <!-- Independent form for the regenerate action -->
+             <form method="POST" action="{{ url_for('ui.regenerate_api_key') }}" class="api-key-regen-form" style="display: inline-block;">
+                <button type="submit" class="button button-success"
+                        onclick="return confirm('Are you sure you want to regenerate the API key?\nAny existing integrations using the old key will stop working immediately.');">
+                    Regenerate New Key
+                </button>
+             </form>
+             <p class="help-text" style="display: inline-block; margin-left: 10px;">Instantly generates and saves a new random API key.</p>
+         </div>
+        <!-- === Regenerate Action Section END === -->
 
 
     </div> <!-- End container -->
 
-    {# JavaScript for Copy Buttons (Improved Version) #}
+    {# JavaScript for Copy Buttons (Using the improved version) #}
     <script>
         function copyToClipboard(text, buttonElement, successMsg, failureMsg, revertMsg) {
-             // ...(JS code remains the same)...
              if (!navigator.clipboard) { console.warn("Clipboard API not available. Trying fallback."); attemptDeprecatedFallback(text, buttonElement, successMsg, failureMsg, revertMsg); return; }
              if (!text) { console.warn("Nothing to copy."); if (buttonElement) { const originalText = buttonElement.textContent; const revertTo = revertMsg || originalText; buttonElement.textContent = 'Nothing!'; setTimeout(() => { buttonElement.textContent = revertTo; }, 2000); } return; }
              navigator.clipboard.writeText(text).then(function() { console.log('Copied via Clipboard API'); if (buttonElement) { const originalText = buttonElement.textContent; const revertTo = revertMsg || originalText; buttonElement.textContent = successMsg || 'Copied!'; setTimeout(() => { buttonElement.textContent = revertTo; }, 2000); }
@@ -229,12 +246,7 @@
                 else { console.error('Fallback execCommand failed'); if (buttonElement) { buttonElement.textContent = failureMsg || 'Copy Failed!'; setTimeout(() => { buttonElement.textContent = revertTo; }, 3000); } }
             } catch (e) { console.error('Fallback copy exception: ', e); if (buttonElement) { buttonElement.textContent = 'Error!'; setTimeout(() => { buttonElement.textContent = revertTo; }, 3000); } }
         }
-        // --- Adjusted copyApiKey to use the new display ID ---
-        function copyApiKey() {
-            var apiKeyInput = document.getElementById("api_key_display"); // <-- Use ID of display input
-            var copyButton = document.getElementById("copyApiKeyButton");
-            copyToClipboard(apiKeyInput ? apiKeyInput.value : null, copyButton, 'Copied!', 'Copy Failed', 'Copy Key');
-        }
+        function copyApiKey() { var apiKeyInput = document.getElementById("api_key"); var copyButton = document.getElementById("copyApiKeyButton"); copyToClipboard(apiKeyInput ? apiKeyInput.value : null, copyButton, 'Copied!', 'Copy Failed', 'Copy Key'); }
         function copyPrompt() { var promptTextarea = document.getElementById("analysis_prompt"); var copyButton = event.currentTarget || event.srcElement; copyToClipboard(promptTextarea ? promptTextarea.value : null, copyButton, 'Copied!', 'Copy Failed', 'Copy Prompt'); }
         function clearPrompt() { var promptTextarea = document.getElementById("analysis_prompt"); var statusSpan = document.getElementById("promptCopyStatus"); if (promptTextarea) { promptTextarea.value = ''; if(statusSpan) { statusSpan.textContent = 'Cleared!'; setTimeout(() => { statusSpan.textContent = ''; }, 1500); } } }
     </script>
