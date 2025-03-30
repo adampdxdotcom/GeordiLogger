@@ -152,12 +152,13 @@
             padding: 15px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
             border-left: 5px solid transparent; /* Default border */
+            /* Use data-status colors for the left border */
+            &[data-status="healthy"] { border-left-color: {{ color_settings.get('color_healthy', '#28a745') }}; }
+            &[data-status="unhealthy"] { border-left-color: {{ color_settings.get('color_unhealthy', '#dc3545') }}; }
+            &[data-status="pending"] { border-left-color: {{ color_settings.get('color_pending', '#ffc107') }}; opacity: 0.9; }
+            &[data-status*="error"] { border-left-color: {{ color_settings.get('color_error', '#fd7e14') }}; }
+            &[data-status="awaiting_scan"] { border-left-color: {{ color_settings.get('color_awaiting_scan', '#6f42c1') }}; }
         }
-        /* Style based on data-status */
-        .container-item[data-status="pending"] { opacity: 0.8; border-left-color: #ffc107; }
-        .container-item[data-status*="error"] { border-left-color: #fd7e14; } /* Catches error_fetching_logs, error_analysis, etc. */
-        .container-item[data-status="unhealthy"] { border-left-color: #dc3545; }
-        .container-item[data-status="healthy"] { border-left-color: #28a745; }
 
         .container-header {
             display: flex;
@@ -171,6 +172,17 @@
             font-size: 1.1em;
             word-break: break-all; /* Break long container names */
         }
+        /* --- MODIFIED: Style for Container Name Link --- */
+        .container-name a {
+            color: inherit; /* Inherit color from parent */
+            text-decoration: none;
+        }
+        .container-name a:hover {
+            text-decoration: underline;
+            color: #0056b3; /* Optional: change color on hover */
+        }
+        /* --- END MODIFIED --- */
+
         .container-id-short { /* Style for the short ID */
             font-size: 0.85em;
             color: #666;
@@ -183,27 +195,33 @@
             border-radius: 50%;
             flex-shrink: 0; /* Prevent dot from shrinking */
             margin-right: 5px; /* Space between dot and name */
+            /* Use data-status colors for the dot background */
+            &.status-healthy { background-color: {{ color_settings.get('color_healthy', '#28a745') }}; box-shadow: 0 0 5px {{ color_settings.get('color_healthy', '#28a745') }}; }
+            &.status-unhealthy { background-color: {{ color_settings.get('color_unhealthy', '#dc3545') }}; box-shadow: 0 0 5px {{ color_settings.get('color_unhealthy', '#dc3545') }}; }
+            &.status-pending { background-color: {{ color_settings.get('color_pending', '#ffc107') }}; box-shadow: 0 0 5px {{ color_settings.get('color_pending', '#ffc107') }}; }
+            &.status-error { background-color: {{ color_settings.get('color_error', '#fd7e14') }}; box-shadow: 0 0 5px {{ color_settings.get('color_error', '#fd7e14') }}; }
+            &.status-awaiting { background-color: {{ color_settings.get('color_awaiting_scan', '#6f42c1') }}; box-shadow: 0 0 5px {{ color_settings.get('color_awaiting_scan', '#6f42c1') }}; }
         }
-        /* Status dot colors */
-        .status-healthy { background-color: #28a745; box-shadow: 0 0 5px #28a745; }
-        .status-unhealthy { background-color: #dc3545; box-shadow: 0 0 5px #dc3545; }
-        .status-pending { background-color: #ffc107; box-shadow: 0 0 5px #ffc107; }
-        .status-error { background-color: #fd7e14; box-shadow: 0 0 5px #fd7e14; } /* Covers all error statuses */
 
+        /* Abnormality details section */
         .abnormality-details {
              margin-top: 10px;
              padding-top: 10px;
              border-top: 1px dashed #eee;
-             display: none; /* Hide by default */
-        }
-        /* Show details only for unhealthy/error */
-        .container-item[data-status="unhealthy"] .abnormality-details,
-        .container-item[data-status*="error"] .abnormality-details {
-             display: block;
+             display: block; /* Always block, content inside controls visibility */
         }
 
         .details-section { margin-bottom: 10px; }
         .details-section strong { display: block; margin-bottom: 5px; color: #444; }
+        .details-section small, .status-message small {
+            font-size: 0.85em;
+            color: #666;
+        }
+        .status-message { /* Container for non-detailed status messages */
+            margin-top: 10px;
+        }
+
+        /* --- MODIFIED: Manage Link & DB ID Error Styles --- */
         .manage-link {
             font-size: 0.9em;
             margin-left: auto; /* Pushes link to the right */
@@ -215,6 +233,17 @@
             white-space: nowrap;
         }
         .manage-link:hover { background-color: #e7f3ff; }
+        .db-id-error-badge {
+             font-size: 0.8em;
+             padding: 2px 5px;
+             background-color: #6c757d;
+             color: white;
+             border-radius: 3px;
+             margin-left: auto; /* Push to right like the button */
+             white-space: nowrap;
+        }
+        /* --- END MODIFIED --- */
+
         .timestamp { font-size: 0.8em; color: #777; margin-top: 5px; display: block;}
 
 
@@ -234,7 +263,7 @@
 
             .container-header { gap: 8px; }
             .container-name { font-size: 1em; flex-grow: 1; }
-            .manage-link { margin-left: 0; margin-top: 5px; width: auto; /* Don't make full width */ }
+            .manage-link, .db-id-error-badge { margin-left: 0; margin-top: 5px; width: auto; /* Don't make full width */ }
             pre { font-size: 0.8em; }
         }
 
@@ -267,7 +296,6 @@
                 <a href="{{ url_for('ui.settings') }}" class="header-link">Settings</a>
                 <!-- Help Link -->
                 <a href="{{ url_for('ui.help_page') }}" class="header-link">Help / Manual</a>
-                <!-- Model selector form REMOVED from here -->
             </div>
         </div> <!-- End scan-info-header -->
 
@@ -326,31 +354,45 @@
         {% if container_statuses %}
             <ul class="container-list">
                 {% for container_id, data in container_statuses.items() %}
-                    {# Add data-status attribute for easier CSS targeting #}
+                    {# Add data-status attribute for easier CSS targeting and colors #}
                     <li class="container-item" data-status="{{ data.status }}">
                         <div class="container-header">
                             {# Status Dot #}
                             {% if data.status == 'healthy' %}<span class="status-dot status-healthy" title="Healthy"></span>
                             {% elif data.status == 'unhealthy' %}<span class="status-dot status-unhealthy" title="Unhealthy"></span>
                             {% elif data.status == 'pending' %}<span class="status-dot status-pending" title="Scan Pending"></span>
+                            {% elif data.status == 'awaiting_scan' %}<span class="status-dot status-awaiting" title="Awaiting Scan"></span>
                             {% else %}<span class="status-dot status-error" title="{{ data.status | replace('_', ' ') | title }}"></span>
                             {% endif %}
 
-                            {# Name and ID #}
-                            <span class="container-name">{{ data.name }}</span>
+                            {# Name (linked) and ID #}
+                            {# --- MODIFIED: Wrap name in link --- #}
+                            <span class="container-name">
+                                <a href="{{ url_for('ui.container_history', container_id=container_id) }}" title="View history for {{ data.name }}">
+                                    {{ data.name }}
+                                </a>
+                            </span>
                             <span class="container-id-short">({{ container_id[:12] }})</span>
 
-                            {# Manage Link - Pushed right by margin-left: auto #}
-                            {% if data.status == 'unhealthy' and data.db_id %}
-                                <a href="{{ url_for('ui.manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a>
+                            {# --- MODIFIED: Conditional Manage Link / DB ID Error --- #}
+                            {% if data.status == 'unhealthy' %}
+                                {% if data.db_id %} {# Check if db_id is not None and truthy #}
+                                    <a href="{{ url_for('ui.manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a>
+                                {% else %}
+                                     {# Optionally show something if status is unhealthy but db_id is missing #}
+                                     <span class="db-id-error-badge" title="Cannot manage: DB ID missing, check logs.">DB ID Err</span>
+                                {% endif %}
                             {% endif %}
+                            {# --- END MODIFIED --- #}
                         </div> {# End container-header #}
 
-                        {# Abnormality Details - Shown only for unhealthy/error via CSS #}
+                        {# Abnormality Details / Status Messages #}
                         <div class="abnormality-details">
-                           {% if data.details %}
+                           {# --- MODIFIED: Display logic based on status and details --- #}
+                           {% if data.status == 'unhealthy' and data.details %}
+                                {# Display analysis and snippet for unhealthy #}
                                 <div class="details-section">
-                                    <strong>{% if data.status == 'unhealthy' %}Ollama Analysis{% else %}Status Detail{% endif %}:</strong>
+                                    <strong>Ollama Analysis:</strong>
                                     {{ data.details.analysis }}
                                 </div>
                                 {% if data.details.snippet %}
@@ -361,10 +403,47 @@
                                 {% endif %}
                                 {% if data.details.timestamp %}
                                 <div class="details-section">
-                                    <small>Detected/Updated: {{ data.details.timestamp.strftime('%Y-%m-%d %H:%M:%S') if data.details.timestamp else 'N/A' }}</small> {# Added check for timestamp #}
+                                    <small>Detected/Updated: {{ data.details.timestamp.strftime('%Y-%m-%d %H:%M:%S') if data.details.timestamp else 'N/A' }}</small>
                                 </div>
                                 {% endif %}
+                            {% elif data.status in ['error_fetching_logs', 'error_analysis', 'error_db_log', 'error_db_lookup'] %}
+                                 {# Display error details #}
+                                 <div class="details-section">
+                                     <strong>Status Detail:</strong>
+                                     <small>{{ data.details.analysis | truncate(150) if data.details else data.status | replace('_', ' ') | title }}</small>
+                                     {% if data.details and data.details.timestamp %}
+                                         <span class="timestamp">Time: {{ data.details.timestamp.strftime('%Y-%m-%d %H:%M:%S') if data.details.timestamp else 'N/A' }}</span>
+                                     {% endif %}
+                                 </div>
+                            {% elif data.status == 'resolved' and data.db_id %}
+                                {# Link to the resolved issue #}
+                                <div class="status-message">
+                                     <small>Last issue (<a href="{{ url_for('ui.manage_abnormality', abnormality_id=data.db_id) }}" title="View resolved issue details">#{{ data.db_id }}</a>) was resolved.</small>
+                                </div>
+                            {% elif data.status == 'ignored' and data.db_id %}
+                                {# Link to the ignored issue #}
+                                <div class="status-message">
+                                     <small>Last issue (<a href="{{ url_for('ui.manage_abnormality', abnormality_id=data.db_id) }}" title="View ignored issue details">#{{ data.db_id }}</a>) was ignored.</small>
+                                </div>
+                            {% elif data.status == 'healthy' and data.db_id %}
+                                {# Healthy now, but linked to a previous resolved/ignored issue #}
+                                <div class="status-message">
+                                     <small>Normal scan. Previous issue: <a href="{{ url_for('ui.manage_abnormality', abnormality_id=data.db_id) }}" title="View previous issue details">#{{ data.db_id }}</a>.</small>
+                                </div>
+                            {% elif data.status == 'awaiting_scan' %}
+                                <div class="status-message">
+                                    <small>Awaiting next scan after status change or startup.</small>
+                                </div>
+                           {% elif data.status == 'healthy' %}
+                                <div class="status-message">
+                                    <small>Normal - No issues detected in last scan.</small>
+                                </div>
+                           {% elif data.status == 'pending' %}
+                                <div class="status-message">
+                                    <small>Scan pending...</small>
+                                </div>
                             {% endif %}
+                           {# --- END MODIFIED --- #}
                         </div> {# End abnormality-details #}
                     </li>
                 {% endfor %} {# End of container loop #}
@@ -379,7 +458,12 @@
         // Refresh every 60 seconds ONLY if a scan is NOT currently running
         var isScanRunning = {{ scan_is_running | tojson }}; // Use tojson filter for safety
         if (!isScanRunning) {
+            // Add check for modal existence/visibility if needed in future
             setTimeout(() => { window.location.reload(); }, 60000); // 60 seconds
+        } else {
+            console.log("Scan is running, auto-refresh deferred.");
+            // Optional: Check again later if scan finishes
+            // setTimeout(() => { if (!document.body.classList.contains('modal-open')) window.location.reload(); }, 15000); // Check again after 15s
         }
     </script>
 </body>

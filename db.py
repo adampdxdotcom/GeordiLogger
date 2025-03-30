@@ -1,6 +1,7 @@
 # db.py
 import sqlite3
-import datetime
+import datetime # Changed from 'import datetime as dt' for consistency
+from datetime import timezone # Import timezone directly
 import logging
 import os
 import json # For storing lists/dicts like ignored containers or colors
@@ -59,15 +60,19 @@ def _parse_iso_datetime(iso_string):
     """Helper function to safely parse ISO datetime strings."""
     if not iso_string: return None
     try:
-        if 'T' not in iso_string: return iso_string
-        if '+' in iso_string: iso_string = iso_string.split('+')[0]
-        if 'Z' in iso_string: iso_string = iso_string.replace('Z', '')
-        if '.' in iso_string:
-             dt_part, ms_part = iso_string.split('.')
-             ms_part = ms_part[:6]; iso_string = f"{dt_part}.{ms_part}"
-        return datetime.datetime.fromisoformat(iso_string)
+        # Handle various ISO formats, ensuring timezone info is considered or added if missing
+        # Attempt direct parsing first
+        if 'Z' in iso_string:
+             dt = datetime.datetime.fromisoformat(iso_string.replace('Z', '+00:00'))
+        elif '+' in iso_string or '-' in iso_string[10:]: # Check for timezone offset
+             dt = datetime.datetime.fromisoformat(iso_string)
+        else:
+             # Assume UTC if no timezone info
+             dt = datetime.datetime.fromisoformat(iso_string).replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc) # Ensure it's always UTC
     except (ValueError, TypeError) as e:
-        logging.warning(f"Could not parse ISO timestamp '{iso_string}': {e}")
+        logging.warning(f"Could not parse ISO timestamp '{iso_string}': {e}. Returning as string.")
+        # Fallback or return original string? Returning original might be safer for display
         return iso_string
 
 def get_db():
@@ -89,6 +94,7 @@ def _row_to_dict_with_parsed_dates(row):
     """Converts a sqlite3.Row to a dict and parses stored ISO date strings."""
     if not row: return None
     item = dict(row)
+    # Use the updated _parse_iso_datetime helper
     item['first_detected_timestamp'] = _parse_iso_datetime(item.get('first_detected_timestamp'))
     item['last_detected_timestamp'] = _parse_iso_datetime(item.get('last_detected_timestamp'))
     return item
@@ -121,8 +127,8 @@ def init_db():
                 container_id TEXT NOT NULL,
                 log_snippet TEXT NOT NULL,
                 ollama_analysis TEXT,
-                first_detected_timestamp TEXT,
-                last_detected_timestamp TEXT,
+                first_detected_timestamp TEXT, /* Store as ISO 8601 String */
+                last_detected_timestamp TEXT, /* Store as ISO 8601 String */
                 status TEXT DEFAULT 'unresolved',
                 resolution_notes TEXT,
                 UNIQUE(container_id, log_snippet)
@@ -162,6 +168,21 @@ def init_db():
                 conn.rollback() # Rollback only the insert if it fails
         else:
              logging.info("Settings table already populated.")
+             # Check for missing default keys and add them if necessary
+             cursor.execute("SELECT key FROM settings")
+             existing_keys = {row['key'] for row in cursor.fetchall()}
+             missing_keys = DEFAULT_SETTINGS.keys() - existing_keys
+             if missing_keys:
+                 logging.info(f"Found missing default setting keys: {', '.join(missing_keys)}. Adding them...")
+                 try:
+                     missing_data = [(k, DEFAULT_SETTINGS[k]) for k in missing_keys]
+                     cursor.executemany("INSERT INTO settings (key, value) VALUES (?, ?)", missing_data)
+                     conn.commit()
+                     logging.info(f"Inserted {len(missing_data)} missing default settings.")
+                 except sqlite3.Error as e_insert_missing:
+                     logging.error(f"Failed to insert missing default settings: {e_insert_missing}")
+                     conn.rollback()
+
 
     except sqlite3.Error as e:
         logging.error(f"Database initialization SQLite error: {e}", exc_info=True) # Log full traceback for DB errors
@@ -186,11 +207,13 @@ def get_setting(key, default=None):
     try:
         cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
         result = cursor.fetchone(); value = result['value'] if result else None
+        # If value not found in DB, try the hardcoded defaults, then the function default
         final_value = value if value is not None else DEFAULT_SETTINGS.get(key, default)
-        logging.debug(f"Retrieved setting '{key}': {'(Using Default)' if value is None else ''}{final_value[:50]}{'...' if final_value and len(final_value)>50 else ''}")
+        logging.debug(f"Retrieved setting '{key}': {'(Using Default)' if value is None else ''}{str(final_value)[:50]}{'...' if final_value and len(str(final_value))>50 else ''}")
         return final_value
     except sqlite3.Error as e:
         logging.error(f"Error fetching setting '{key}': {e}")
+        # Fallback to defaults on error
         return DEFAULT_SETTINGS.get(key, default)
     finally:
         if conn: conn.close()
@@ -234,101 +257,180 @@ def get_all_settings():
     finally:
         if conn: conn.close()
 
-# --- Abnormality Functions (Unchanged Logically) ---
+# --- Abnormality Functions ---
+
+# --- START: Updated add_or_update_abnormality Function ---
 def add_or_update_abnormality(container_name, container_id, log_snippet, ollama_analysis):
-    conn = get_db(); cursor = conn.cursor()
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    """Adds a new abnormality or updates the last_detected timestamp if an unresolved one exists. Returns the ID of the record."""
+    conn = get_db()
+    cursor = conn.cursor()
+    record_id = None # <<< Initialize ID variable
     try:
-        cursor.execute("SELECT id, status FROM abnormalities WHERE container_id = ? AND log_snippet = ? ORDER BY last_detected_timestamp DESC LIMIT 1", (container_id, log_snippet))
+        # Check if an 'unresolved' record with the same snippet already exists
+        cursor.execute("""
+            SELECT id, last_detected_timestamp FROM abnormalities
+            WHERE container_id = ? AND log_snippet = ? AND status = 'unresolved'
+            ORDER BY last_detected_timestamp DESC LIMIT 1
+        """, (container_id, log_snippet))
         existing = cursor.fetchone()
+
+        # Use timezone-aware datetime
+        now = datetime.datetime.now(timezone.utc)
+        now_iso = now.isoformat() # Store as ISO string
+
         if existing:
-            if existing['status'] == 'unresolved':
-                cursor.execute('UPDATE abnormalities SET last_detected_timestamp = ?, ollama_analysis = ? WHERE id = ?', (now_iso, ollama_analysis, existing['id']))
-                conn.commit(); logging.info(f"Existing 'unresolved' abnormality updated for {container_name[:12]}")
-            else: logging.debug(f"Abnormality for {container_name[:12]} exists but is '{existing['status']}'.")
+            # Update last_detected_timestamp and potentially analysis for the existing unresolved record
+            record_id = existing['id'] # <<< Get the ID of the existing record
+            # Always update timestamp and analysis
+            cursor.execute("""
+                UPDATE abnormalities
+                SET last_detected_timestamp = ?, ollama_analysis = ?
+                WHERE id = ?
+            """, (now_iso, ollama_analysis, record_id))
+            conn.commit()
+            logging.info(f"Existing 'unresolved' abnormality updated for {container_name[:12]} (ID: {record_id})")
         else:
-            cursor.execute('INSERT INTO abnormalities (container_name, container_id, log_snippet, ollama_analysis, first_detected_timestamp, last_detected_timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                           (container_name, container_id, log_snippet, ollama_analysis, now_iso, now_iso, 'unresolved'))
-            conn.commit(); logging.info(f"New abnormality logged for {container_name[:12]} ID {cursor.lastrowid}")
-    except sqlite3.Error as e: logging.error(f"Error adding/updating abnormality: {e}"); conn.rollback()
-    finally: conn.close()
+            # Insert a new 'unresolved' record
+            cursor.execute("""
+                INSERT INTO abnormalities
+                (container_id, container_name, log_snippet, ollama_analysis, status, first_detected_timestamp, last_detected_timestamp)
+                VALUES (?, ?, ?, ?, 'unresolved', ?, ?)
+            """, (container_id, container_name, log_snippet, ollama_analysis, now_iso, now_iso))
+            record_id = cursor.lastrowid # <<< Get the ID of the newly inserted record
+            conn.commit()
+            # Use the newly obtained ID in the log message
+            logging.info(f"New abnormality logged for {container_name[:12]} ID {record_id}")
+
+    except sqlite3.Error as e:
+        logging.error(f"DB Error adding/updating abnormality for {container_id[:12]}: {e}")
+        conn.rollback() # Rollback on error
+        record_id = None # Ensure ID is None on error
+    except Exception as e:
+         logging.exception(f"Unexpected error in add_or_update_abnormality for {container_id[:12]}:")
+         conn.rollback()
+         record_id = None
+    finally:
+        if conn:
+            conn.close()
+
+    return record_id # <<< RETURN THE ID (or None if error)
+# --- END: Updated add_or_update_abnormality Function ---
+
 
 def get_abnormality_status(container_id, log_snippet):
+    """Retrieves the status of the latest abnormality matching container_id and snippet."""
     conn = get_db(); cursor = conn.cursor(); status = None
     try:
-        cursor.execute("SELECT status FROM abnormalities WHERE container_id = ? AND log_snippet = ? ORDER BY last_detected_timestamp DESC LIMIT 1", (container_id, log_snippet))
+        cursor.execute("""
+            SELECT status FROM abnormalities
+            WHERE container_id = ? AND log_snippet = ?
+            ORDER BY last_detected_timestamp DESC LIMIT 1
+        """, (container_id, log_snippet))
         result = cursor.fetchone(); status = result['status'] if result else None
     except sqlite3.Error as e: logging.error(f"DB Error checking status for {container_id[:12]}: {e}")
     finally: conn.close()
     return status
 
 def get_latest_unresolved_abnormality_id(container_id, log_snippet=None):
+    """Gets the ID of the latest 'unresolved' abnormality for a container, optionally matching a snippet."""
     conn = get_db(); cursor = conn.cursor(); db_id = None
     try:
         if log_snippet:
-             cursor.execute("SELECT id FROM abnormalities WHERE container_id = ? AND log_snippet = ? AND status = 'unresolved' ORDER BY last_detected_timestamp DESC LIMIT 1", (container_id, log_snippet))
+             cursor.execute("""
+                SELECT id FROM abnormalities
+                WHERE container_id = ? AND log_snippet = ? AND status = 'unresolved'
+                ORDER BY last_detected_timestamp DESC LIMIT 1
+            """, (container_id, log_snippet))
              result = cursor.fetchone(); db_id = result['id'] if result else None
+        # If no specific snippet match, find the latest unresolved for the container
         if not db_id:
-            cursor.execute("SELECT id FROM abnormalities WHERE container_id = ? AND status = 'unresolved' ORDER BY last_detected_timestamp DESC LIMIT 1", (container_id,))
+            cursor.execute("""
+                SELECT id FROM abnormalities
+                WHERE container_id = ? AND status = 'unresolved'
+                ORDER BY last_detected_timestamp DESC LIMIT 1
+            """, (container_id,))
             result = cursor.fetchone(); db_id = result['id'] if result else None
     except sqlite3.Error as e: logging.error(f"Error fetching latest unresolved ID for {container_id[:12]}: {e}"); return None
     finally: conn.close()
     return db_id
 
 def get_abnormality_by_id(abnormality_id):
+    """Fetches a single abnormality by its primary key ID."""
     conn = get_db(); cursor = conn.cursor()
-    try: cursor.execute("SELECT * FROM abnormalities WHERE id = ?", (abnormality_id,)); row = cursor.fetchone(); return _row_to_dict_with_parsed_dates(row)
+    try:
+        cursor.execute("SELECT * FROM abnormalities WHERE id = ?", (abnormality_id,));
+        row = cursor.fetchone();
+        return _row_to_dict_with_parsed_dates(row)
     except sqlite3.Error as e: logging.error(f"Error fetching abnormality by ID {abnormality_id}: {e}"); return None
     finally: conn.close()
 
 def update_abnormality_status(abnormality_id, status, notes=None):
+    """Updates the status and optionally notes for a specific abnormality ID."""
     conn = get_db(); cursor = conn.cursor()
-    if status not in ['unresolved', 'resolved', 'ignored']: return False
+    if status not in ['unresolved', 'resolved', 'ignored']:
+        logging.warning(f"Invalid status '{status}' provided for update_abnormality_status.")
+        return False
     try:
-        if notes is not None: cursor.execute("UPDATE abnormalities SET status = ?, resolution_notes = ? WHERE id = ?", (status, notes, abnormality_id))
-        else: cursor.execute("UPDATE abnormalities SET status = ? WHERE id = ?", (status, abnormality_id))
+        if notes is not None:
+            cursor.execute("UPDATE abnormalities SET status = ?, resolution_notes = ? WHERE id = ?", (status, notes, abnormality_id))
+        else:
+            cursor.execute("UPDATE abnormalities SET status = ? WHERE id = ?", (status, abnormality_id))
         conn.commit(); success = cursor.rowcount > 0
-        if success: logging.info(f"Updated status for abnormality ID {abnormality_id} to {status}")
-        else: logging.warning(f"No abnormality found with ID {abnormality_id} to update.")
+        if success: logging.info(f"Updated status for abnormality ID {abnormality_id} to '{status}'")
+        else: logging.warning(f"No abnormality found with ID {abnormality_id} to update status.")
         return success
-    except sqlite3.Error as e: logging.error(f"Error updating status for ID {abnormality_id}: {e}"); conn.rollback(); return False
-    finally: conn.close()
+    except sqlite3.Error as e:
+        logging.error(f"Error updating status for ID {abnormality_id}: {e}");
+        conn.rollback();
+        return False
+    finally:
+        conn.close()
 
 def get_recent_abnormalities(hours=24):
+    """Fetches abnormalities detected or updated within the last N hours."""
     conn = get_db(); cursor = conn.cursor(); results = []
     try:
-        cutoff_iso = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)).isoformat()
+        cutoff_time = datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=hours)
+        cutoff_iso = cutoff_time.isoformat()
         cursor.execute("SELECT * FROM abnormalities WHERE last_detected_timestamp >= ? ORDER BY last_detected_timestamp DESC", (cutoff_iso,))
         rows = cursor.fetchall()
         for row in rows: results.append(_row_to_dict_with_parsed_dates(row))
+        logging.debug(f"Fetched {len(results)} abnormalities from last {hours} hours.")
     except sqlite3.Error as e: logging.error(f"Error fetching recent abnormalities: {e}")
     finally: conn.close()
     return results
 
-def get_abnormalities_by_container(container_id):
+def get_abnormalities_by_container(container_id, limit=50):
+    """Fetches abnormalities for a specific container_id, most recent first."""
     conn = get_db(); cursor = conn.cursor(); results = []
     try:
-        cursor.execute("SELECT * FROM abnormalities WHERE container_id = ? ORDER BY last_detected_timestamp DESC", (container_id,))
+        cursor.execute("SELECT * FROM abnormalities WHERE container_id = ? ORDER BY last_detected_timestamp DESC LIMIT ?", (container_id, limit))
         rows = cursor.fetchall()
         for row in rows: results.append(_row_to_dict_with_parsed_dates(row))
+        logging.debug(f"Fetched {len(results)} abnormalities for container {container_id[:12]} (limit {limit}).")
     except sqlite3.Error as e: logging.error(f"Error fetching abnormalities for container {container_id[:12]}: {e}")
     finally: conn.close()
     return results
 
-def get_abnormalities_by_status(status='unresolved'):
+def get_abnormalities_by_status(status='unresolved', limit=100):
+    """Fetches abnormalities by status ('unresolved', 'resolved', 'ignored', 'all'), most recent first."""
     if status not in ['unresolved', 'resolved', 'ignored', 'all']: status = 'unresolved'
     conn = get_db(); cursor = conn.cursor(); results = []
     try:
-        if status == 'all': cursor.execute("SELECT * FROM abnormalities ORDER BY last_detected_timestamp DESC")
-        else: cursor.execute("SELECT * FROM abnormalities WHERE status = ? ORDER BY last_detected_timestamp DESC", (status,))
+        if status == 'all':
+            cursor.execute("SELECT * FROM abnormalities ORDER BY last_detected_timestamp DESC LIMIT ?", (limit,))
+        else:
+            cursor.execute("SELECT * FROM abnormalities WHERE status = ? ORDER BY last_detected_timestamp DESC LIMIT ?", (status, limit))
         rows = cursor.fetchall()
         for row in rows:
             dict_row = _row_to_dict_with_parsed_dates(row)
-            if dict_row: # Convert datetimes back to strings for JSON
-                 if isinstance(dict_row.get('first_detected_timestamp'), datetime.datetime): dict_row['first_detected_timestamp'] = dict_row['first_detected_timestamp'].isoformat() + "Z" # Add Z for UTC indication
-                 if isinstance(dict_row.get('last_detected_timestamp'), datetime.datetime): dict_row['last_detected_timestamp'] = dict_row['last_detected_timestamp'].isoformat() + "Z"
+            if dict_row: # Convert datetimes back to strings for JSON safety
+                 if isinstance(dict_row.get('first_detected_timestamp'), datetime.datetime):
+                     dict_row['first_detected_timestamp'] = dict_row['first_detected_timestamp'].isoformat() + "Z" # Add Z for UTC indication
+                 if isinstance(dict_row.get('last_detected_timestamp'), datetime.datetime):
+                     dict_row['last_detected_timestamp'] = dict_row['last_detected_timestamp'].isoformat() + "Z"
                  results.append(dict_row)
-        logging.debug(f"Fetched {len(results)} abnormalities with status '{status}'.")
+        logging.debug(f"Fetched {len(results)} abnormalities with status '{status}' (limit {limit}).")
     except sqlite3.Error as e: logging.error(f"Error fetching abnormalities by status {status}: {e}")
     finally: conn.close()
     return results
@@ -336,8 +438,9 @@ def get_abnormalities_by_status(status='unresolved'):
 def get_last_known_status(container_id):
     """
     Checks the database for the most recent record of a container_id
-    and returns its status and abnormality ID if unresolved.
+    and returns its status and abnormality ID.
     Returns ('no_history', None) if no record found.
+    Returns ('db_error', None) on database error.
     """
     conn = get_db()
     try:
@@ -350,16 +453,17 @@ def get_last_known_status(container_id):
         """, (container_id,))
         result = cursor.fetchone()
         if result:
-            abnormality_id, status = result
-            if status == 'unresolved':
-                return status, abnormality_id # e.g., ('unresolved', 123)
-            else:
-                return status, None # e.g., ('resolved', None) or ('ignored', None)
+            abnormality_id, status = result['id'], result['status']
+            # Always return the ID, regardless of status, for potential linking
+            return status, abnormality_id # e.g., ('unresolved', 123), ('resolved', 124)
         else:
             return 'no_history', None
     except sqlite3.Error as e:
         logging.error(f"Database error in get_last_known_status for {container_id[:12]}: {e}")
         return 'db_error', None
+    finally:
+        if conn:
+            conn.close()
 
 # Initialize the database when this module is first imported
 # This function is now more robust with logging

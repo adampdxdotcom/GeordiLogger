@@ -170,14 +170,20 @@ def populate_initial_statuses():
             try:
                 # Check if the function exists before calling
                 if hasattr(db, 'get_last_known_status'):
-                    last_status, db_id = db.get_last_known_status(container_id)
+                    # <<< MODIFIED: Expect tuple return (status, db_id) >>>
+                    result_tuple = db.get_last_known_status(container_id)
+                    if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
+                        last_status, db_id = result_tuple
+                    else:
+                        logging.error(f"Unexpected return type/length from db.get_last_known_status for {container_name[:12]}: {result_tuple}. Expected (status, db_id).")
+                        last_status, db_id = 'db_error', None
                 else:
                     logging.error("CRITICAL: db.py does not have the required 'get_last_known_status' function. Cannot perform initial status population.")
                     last_status, db_id = 'error_db_lookup', None # Mark as error if function missing
             except ValueError as unpack_err:
-                 # Handle the specific "too many values to unpack" error or similar issues
-                 logging.error(f"Error unpacking DB status return for {container_name[:12]}: {unpack_err}. Check db.get_abnormality_status return signature.")
-                 existing_status = 'db_error'
+                 # Handle the specific "too many values to unpack" error or similar issues if the signature changes unexpectedly
+                 logging.error(f"Error unpacking DB status return for {container_name[:12]}: {unpack_err}. Check db.get_last_known_status return signature.")
+                 last_status = 'db_error' # Use status directly
                  db_id = None
             except Exception as db_lookup_err:
                 logging.error(f"Error calling db.get_last_known_status for {container_name[:12]}: {db_lookup_err}")
@@ -189,6 +195,7 @@ def populate_initial_statuses():
             if last_status == 'unresolved':
                 current_app_status = 'unhealthy'
                 logging.info(f"Initial status for {container_name[:12]}: Unhealthy (based on DB ID {db_id})")
+                # Keep the db_id from get_last_known_status
             elif last_status in ['resolved', 'ignored']:
                 current_app_status = 'awaiting_scan' # Needs scan to confirm current health
                 db_id = None # Don't link to resolved/ignored issue on dashboard initially
@@ -212,7 +219,7 @@ def populate_initial_statuses():
                 'id': container_id,
                 'status': current_app_status,
                 'details': None, # No scan details yet
-                'db_id': db_id # Store ID only if status is unhealthy
+                'db_id': db_id # Store ID only if status is unhealthy (or pending resolution check)
             }
 
         # Update global state safely
@@ -298,7 +305,6 @@ def scan_docker_logs():
             logs = analyzer.fetch_container_logs(container, num_lines=log_lines) # Pass log_lines setting
             if logs is None: current_scan_results[container_id].update({'status': 'error_fetching_logs', 'details': {'analysis': 'Failed logs', 'snippet': ''}}); continue
 
-            # --- START: Integrated Code Block ---
             # --- Analysis Block ---
             analysis_result = "NORMAL" # Default if no analysis performed
             log_snippet = "" # Initialize snippet
@@ -330,68 +336,111 @@ def scan_docker_logs():
                 logging.warning(f"Abnormality detected by AI in {container_name[:12]}: {log_snippet}") # Use extracted snippet
 
                 # Check DB status for this specific abnormality
-                existing_status = 'unknown'
-                db_id = None
                 # Ensure function exists before calling
+                db_id = None # Initialize db_id for cases where we don't find a specific record
+                existing_status = 'unknown' # Default status if DB check fails or no record found
+
                 if hasattr(db, 'get_abnormality_status'):
                     try:
-                        existing_status, db_id = db.get_abnormality_status(container_id, log_snippet)
+                        # Call the function - it returns only the status string or None
+                        status_from_db = db.get_abnormality_status(container_id, log_snippet)
+
+                        if status_from_db is not None:
+                             existing_status = status_from_db # Use the status found in the DB
+                             # Since the function only returns status, we need another way
+                             # to get the ID if the status is resolved/ignored.
+                             if existing_status in ['resolved', 'ignored']:
+                                  # Add a quick query to get the ID for linking purposes
+                                  # Note: This adds another DB call, modifying the function is better
+                                  temp_conn = None # Initialize outside try
+                                  try:
+                                       temp_conn = db.get_db()
+                                       cursor = temp_conn.cursor()
+                                       cursor.execute("SELECT id FROM abnormalities WHERE container_id = ? AND log_snippet = ? AND status = ? ORDER BY last_detected_timestamp DESC LIMIT 1",
+                                                      (container_id, log_snippet, existing_status))
+                                       id_result = cursor.fetchone()
+                                       if id_result:
+                                           db_id = id_result['id']
+                                           logging.debug(f"Found matching '{existing_status}' record ID {db_id} for {container_name[:12]} snippet.")
+                                  except Exception as id_lookup_err:
+                                        logging.error(f"Error looking up ID for existing '{existing_status}' status: {id_lookup_err}")
+                                        # If ID lookup fails, db_id remains None, which is acceptable
+                                  finally:
+                                       if temp_conn: temp_conn.close()
+                        else:
+                             # If status_from_db is None, it means no matching record found for this specific snippet
+                             existing_status = 'no_history' # Or keep 'unknown'? Let's use 'no_history'
+                             logging.debug(f"No specific DB record found for {container_name[:12]} and snippet.")
+
                     except Exception as db_lookup_err:
-                        logging.error(f"Error checking DB status for {container_name[:12]} snippet: {db_lookup_err}")
-                        existing_status = 'db_error'
+                        logging.error(f"Error calling/processing DB status function for {container_name[:12]} snippet: {db_lookup_err}")
+                        existing_status = 'db_error' # Indicate a failure during the DB check
                 else:
                     logging.error("DB function 'get_abnormality_status' missing.")
-                    existing_status = 'db_error'
+                    existing_status = 'db_error' # Mark as DB error if the function doesn't exist
 
+
+                # --- Now use existing_status and db_id ---
 
                 if existing_status in ['resolved', 'ignored']:
                     # Abnormality found, but already handled in DB. Treat as healthy for dashboard.
                     current_scan_results[container_id].update({
                         'status': 'healthy',
                         'details': None, # Clear details
-                        'db_id': db_id # Keep link to the resolved/ignored record
+                        'db_id': db_id # Link to the existing record using the ID we looked up (or None if lookup failed)
                     })
                     logging.info(f"Detected abnormality for {container_name[:12]} matches a previously '{existing_status}' issue (ID: {db_id}). Treating as Healthy.")
                 elif existing_status == 'db_error':
-                     # Failed to check DB, mark as DB error status
+                     # Failed to check DB (either function missing or error during call/processing)
                      current_scan_results[container_id].update({
-                          'status': 'error_db_lookup',
+                          'status': 'error_db_lookup', # Specific status for DB check failure
                           'details': {'analysis': analysis_result, 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
                           'db_id': None
                      })
-                else: # Unresolved or unknown/no history for this specific snippet
+                # --- START: Updated 'else' Block for New/Unresolved Issues ---
+                else: # Handles 'unresolved', 'no_history', 'unknown' -> Treat as needing logging/update
                     # Log to DB and set status to unhealthy
-                    new_db_id = None
+                    new_db_id = None # Initialize
                     try:
                         if hasattr(db, 'add_or_update_abnormality'):
+                            # <<< CAPTURE THE RETURNED ID HERE >>>
                             new_db_id = db.add_or_update_abnormality(
                                 container_name=container_name,
                                 container_id=container_id,
                                 log_snippet=log_snippet,
                                 ollama_analysis=analysis_result # Store the full AI response
                             )
-                            logging.info(f"Logged new/updated abnormality for {container_name[:12]} ID {new_db_id if new_db_id else 'N/A'}")
+                            # <<< REMOVE REDUNDANT LOGGING HERE (it's now done inside db.py) >>>
+                            # logging.info(f"Logged new/updated abnormality for {container_name[:12]} ID {new_db_id if new_db_id else 'N/A'}")
+                            if new_db_id is None:
+                                 # If db function returned None, it indicates a DB error during save
+                                 existing_status = 'db_error' # Set status to reflect save failure
                         else:
                              logging.error("DB function 'add_or_update_abnormality' missing.")
-                             # Fall through to set status to db_error? Or just unhealthy without DB log? Let's mark db_error.
-                             existing_status = 'db_error' # Reuse variable to indicate DB logging failed
+                             existing_status = 'db_error' # Mark as DB error if function missing
 
                     except Exception as db_err:
-                         logging.error(f"DB Error logging abnormality for {container_name[:12]}: {db_err}")
-                         existing_status = 'db_error' # Reuse variable
+                         # Catch potential errors calling the function itself
+                         logging.error(f"Error calling add_or_update_abnormality for {container_name[:12]}: {db_err}")
+                         existing_status = 'db_error' # Mark as DB error
 
+                    # --- Set status based on DB outcome ---
                     if existing_status == 'db_error':
+                         # If DB save failed (either function missing, exception, or returned None)
                          current_scan_results[container_id].update({
                              'status': 'error_db_log',
                              'details': {'analysis': analysis_result, 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
-                             'db_id': None
+                             'db_id': None # No valid DB ID if save failed
                          })
                     else:
+                         # DB Save was successful, set status to unhealthy
                          current_scan_results[container_id].update({
                              'status': 'unhealthy',
                              'details': {'analysis': analysis_result, 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
-                             'db_id': new_db_id # Link to the newly created/updated DB record
+                             'db_id': new_db_id # <<< USE THE CAPTURED ID >>>
                          })
+                # --- END: Updated 'else' Block ---
+
 
             elif analysis_result == "NORMAL" or analysis_result == "SKIPPED":
                  # --- NORMAL or SKIPPED Analysis ---
@@ -425,7 +474,7 @@ def scan_docker_logs():
                      'details': {'analysis': f"Unexpected Format: {analysis_result}", 'snippet': log_snippet, 'timestamp': datetime.now(scan_timezone)},
                      'db_id': None
                  })
-            # --- END: Integrated Code Block ---
+            # --- END: Result Processing Block ---
 
 
         if not scan_cancelled: # Update global state
@@ -615,8 +664,16 @@ def api_status():
 def api_containers():
     with container_statuses_lock:
         statuses_copy = {}
-        for cid, data in container_statuses.items(): statuses_copy[cid] = { "id": data.get("id"), "name": data.get("name"), "status": data.get("status"), "db_id": data.get("db_id") if data.get("status") == 'unhealthy' else None }
+        # Ensure db_id is only included when status is actually 'unhealthy' after the scan logic runs
+        for cid, data in container_statuses.items():
+            statuses_copy[cid] = {
+                "id": data.get("id"),
+                "name": data.get("name"),
+                "status": data.get("status"),
+                "db_id": data.get("db_id") if data.get("status") == 'unhealthy' else None
+            }
     return jsonify(statuses_copy)
+
 
 @app.route('/api/issues', methods=['GET'])
 def api_issues():
@@ -638,9 +695,11 @@ def api_issues():
         issues = db.get_abnormalities_by_status(status=status_filter, limit=limit)
         # Convert datetime objects to ISO format strings for JSON compatibility
         for issue in issues:
-            if isinstance(issue.get('timestamp'), datetime):
+            # Check if 'timestamp' exists and is a datetime before formatting
+            if 'timestamp' in issue and isinstance(issue.get('timestamp'), datetime):
                 issue['timestamp'] = issue['timestamp'].isoformat()
-            if isinstance(issue.get('last_seen'), datetime):
+            # Check if 'last_seen' exists and is a datetime before formatting
+            if 'last_seen' in issue and isinstance(issue.get('last_seen'), datetime):
                  issue['last_seen'] = issue['last_seen'].isoformat()
         return jsonify(issues)
     except Exception as e:
