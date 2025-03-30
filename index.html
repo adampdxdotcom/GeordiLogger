@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="60">
+    <title>Docker Log Monitor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        /* Basic styling */
+        body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
+        *, *:before, *:after { box-sizing: border-box; }
+        .container { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; max-width: 1200px; margin-left: auto; margin-right: auto; }
+        h1, h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 0; }
+        h1 { margin-bottom: 15px; } /* Ensure space below H1 */
+        h3 { margin-top: 0; margin-bottom: 10px; color: #444; font-size: 1.1em;}
+        pre { background: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.85em; max-height: 200px; overflow-y: auto; border: 1px solid #ddd; }
+        .scan-info p, .summary-info p { margin: 5px 0; font-size: 0.9em; color: #555; }
+        .summary-info .summary-text { font-style: italic; color: #333; margin-left: 10px; }
+        .summary-info .summary-error { color: #dc3545; font-weight: bold; }
+
+        /* --- NEW: Header Links Styling --- */
+        .header-links {
+            text-align: right; /* Align links to the right */
+            margin-bottom: 10px; /* Space below links, before H1 */
+            padding-top: 5px; /* Add a little space above */
+        }
+        .header-link {
+            font-size: 0.9em;
+            color: #007bff;
+            text-decoration: none;
+            margin-left: 15px; /* Space between links */
+        }
+        .header-link:hover {
+            text-decoration: underline;
+        }
+        /* --- END: Header Links Styling --- */
+
+        /* Container List Styles */
+        .container-list { list-style: none; padding: 0; }
+        .container-item { background-color: #fff; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 15px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border-left: 5px solid transparent; }
+
+        .container-header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 5px; }
+        .container-name { font-weight: bold; font-size: 1.1em; word-break: break-all; }
+        .container-name a { color: inherit; text-decoration: none; }
+        .container-name a:hover { text-decoration: underline; color: #0056b3; }
+        .container-id-short { font-size: 0.85em; color: #666; word-break: keep-all; }
+        .status-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-right: 8px; }
+
+        .manage-link { font-size: 0.9em; margin-left: auto; padding: 3px 8px; border: 1px solid #007bff; color: #007bff; text-decoration: none; border-radius: 4px; white-space: nowrap; }
+        .manage-link:hover { background-color: #e7f3ff; }
+
+        /* Flash Messages */
+        .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .flash.info { background-color: #cce5ff; color: #004085; border: 1px solid #b8daff; }
+        .flash.warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+
+        /* Scan Running Indicator */
+        .scan-in-progress { color: #0056b3; font-size: 0.9em; font-weight: bold; background-color: #e7f3ff; padding: 5px 10px; border-radius: 4px; display: inline-block; margin-top: 5px; margin-bottom: 5px; }
+
+        /* Scheduler Controls */
+        .scheduler-controls { margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; display: flex; flex-wrap: wrap; gap: 10px; }
+        .scheduler-controls button { padding: 8px 12px; cursor: pointer; border-radius: 4px; border: none; font-weight: bold; white-space: nowrap; }
+        .button-pause { background-color: #ffc107; color: #333; }
+        .button-pause:hover { background-color: #e0a800; }
+        .button-resume { background-color: #28a745; color: white; }
+        .button-resume:hover { background-color: #218838; }
+        .button-stop { background-color: #dc3545; color: white; }
+        .button-stop:hover { background-color: #c82333; }
+        .button-start-now { background-color: #17a2b8; color: white; }
+        .button-start-now:hover { background-color: #138496; }
+        .button-trigger-summary { background-color: #6c757d; color: white; }
+        .button-trigger-summary:hover { background-color: #5a6268; }
+        .scheduler-status p em { color: #6c757d; font-size: 0.9em; }
+
+        /* Responsive Styles */
+        @media (max-width: 768px) {
+            body { padding: 5px; }
+            .container { padding: 10px; }
+            h1 { font-size: 1.5em; }
+            h2 { font-size: 1.25em; }
+            .container-header { gap: 8px; }
+            .container-name { font-size: 1em; flex-grow: 1; }
+            .manage-link { margin-left: 0; margin-top: 5px; width: 100%; text-align: center; }
+            pre { font-size: 0.8em; }
+            .scheduler-controls { flex-direction: column; align-items: stretch; }
+            .scheduler-controls button { width: 100%; }
+            .header-links { padding-top: 0; /* Reduce padding on mobile */ }
+        }
+        @media (max-width: 480px) {
+             .scan-info p, .summary-info p { font-size: 0.85em; }
+             .container-name { font-size: 0.95em; }
+             .container-id-short { display: none; }
+        }
+    </style>
+
+    <!-- Dynamic Color Styles -->
+    {% if color_settings %}
+    <style>
+        .container-item[data-status="healthy"] { border-left-color: {{ color_settings.color_healthy | default('#28a745') }}; }
+        .status-healthy { background-color: {{ color_settings.color_healthy | default('#28a745') }}; box-shadow: 0 0 5px {{ color_settings.color_healthy | default('#28a745') }}; }
+
+        .container-item[data-status="unhealthy"] { border-left-color: {{ color_settings.color_unhealthy | default('#dc3545') }}; }
+        .status-unhealthy { background-color: {{ color_settings.color_unhealthy | default('#dc3545') }}; box-shadow: 0 0 5px {{ color_settings.color_unhealthy | default('#dc3545') }}; }
+
+        .container-item[data-status*="error"] { border-left-color: {{ color_settings.color_error | default('#fd7e14') }}; }
+        .status-error { background-color: {{ color_settings.color_error | default('#fd7e14') }}; box-shadow: 0 0 5px {{ color_settings.color_error | default('#fd7e14') }}; }
+
+        .container-item[data-status="pending"] { border-left-color: {{ color_settings.color_pending | default('#ffc107') }}; }
+        .status-pending { background-color: {{ color_settings.color_pending | default('#ffc107') }}; box-shadow: 0 0 5px {{ color_settings.color_pending | default('#ffc107') }}; }
+
+        .container-item[data-status="awaiting_scan"] { border-left-color: {{ color_settings.color_awaiting_scan | default('#6f42c1') }}; }
+        .status-awaiting_scan { background-color: {{ color_settings.color_awaiting_scan | default('#6f42c1') }}; box-shadow: 0 0 5px {{ color_settings.color_awaiting_scan | default('#6f42c1') }}; }
+    </style>
+    {% endif %}
+
+</head>
+<body>
+    <div class="container">
+        {# --- NEW: Header Links Moved Here --- #}
+        <div class="header-links">
+            {# NOTE: '/help' route needs to be created in app.py #}
+            <a href="{{ url_for('help') }}" class="header-link">[Help]</a>
+            <a href="{{ url_for('settings') }}" class="header-link">[Settings]</a>
+        </div>
+        {# --- END: Header Links --- #}
+
+        <h1>Docker Log Monitor</h1> {# Link removed from here #}
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %} {% if messages %}
+            {% for category, message in messages %} <div class="flash {{ category }}">{{ message }}</div> {% endfor %}
+        {% endif %} {% endwith %}
+
+        <!-- AI Health Summary -->
+        <div class="summary-info">
+            <h3>AI Health Summary</h3>
+            {% if ai_summary_error %} <p class="summary-error">Error generating summary: {{ ai_summary_error }}</p>
+            {% else %} <p class="summary-text">{{ ai_summary | safe }}</p> {% endif %}
+            <p><small>Last generated: {{ ai_summary_last_updated }}</small></p>
+        </div>
+
+        <!-- Scan Info Section -->
+        <div class="scan-info">
+            <h3>Scan Status</h3>
+            <p>Last Scan Status: {{ scan_status if scan_status else "Not run yet" }}</p>
+            {% if scan_is_running %} <p class="scan-in-progress"><em>Log scan currently in progress...</em></p> {% endif %}
+            <p>Next Log Scan scheduled around: {{ next_scan_time if next_scan_time else "N/A" }} (Times in {{ timezone }})</p>
+        </div>
+
+        <!-- Scheduler Control Buttons -->
+        <div class="scheduler-controls">
+            {% if job_state == 'running' %} <form method="POST" action="{{ url_for('pause_schedule') }}" style="display: inline-block;"><button type="submit" class="button-pause">Pause Log Scan</button></form> {% endif %}
+            {% if job_state == 'paused' %} <form method="POST" action="{{ url_for('resume_schedule') }}" style="display: inline-block;"><button type="submit" class="button-resume">Resume Log Scan</button></form> {% endif %}
+            {% if scan_is_running %} <form method="POST" action="{{ url_for('stop_current_scan') }}" style="display: inline-block;"><button type="submit" class="button-stop">Stop Current Scan</button></form> {% endif %}
+            {% if not scan_is_running and job_state != 'scheduler_stopped' and job_state != 'error' %} <form method="POST" action="{{ url_for('trigger_scan') }}" style="display: inline-block;"><button type="submit" class="button-start-now">Scan Logs Now</button></form> {% endif %}
+            {% if job_state != 'scheduler_stopped' and job_state != 'error' %} <form method="POST" action="{{ url_for('trigger_summary') }}" style="display: inline-block;"><button type="submit" class="button-trigger-summary">Generate Summary Now</button></form> {% endif %}
+        </div>
+         <!-- Scheduler Status Messages -->
+         <div class="scheduler-status">
+            {% if job_state == 'stopped' %} <p><em>Log scan job is stopped (not scheduled).</em></p>
+            {% elif job_state == 'scheduler_stopped' %} <p><em>Scheduler is not running. Restart application.</em></p>
+            {% elif job_state == 'error' %} <p><em>Error checking scan job status.</em></p>
+            {% endif %}
+        </div>
+    </div>
+
+
+    <!-- Container List Section -->
+    <div class="container">
+        <h2>Container Status</h2>
+        {% if container_statuses %}
+            <ul class="container-list">
+                {% for container_id, data in container_statuses.items() %}
+                    <li class="container-item" data-status="{{ data.status }}">
+                        <div class="container-header">
+                            <span class="status-dot status-{{ data.status }}" title="{{ data.status | replace('_', ' ') | title }}"></span>
+                            <span class="container-name"><a href="{{ url_for('container_history', container_id=data.id) }}" title="View history for {{ data.name }}">{{ data.name }}</a></span>
+                            <span class="container-id-short">({{ container_id[:12] }})</span>
+                            {% if data.status == 'unhealthy' and data.db_id %} <a href="{{ url_for('manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a> {% endif %}
+                        </div>
+                        {# Details Section REMOVED #}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>No running containers detected or initial scan pending.</p>
+        {% endif %}
+    </div>
+
+</body>
+</html>

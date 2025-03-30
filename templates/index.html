@@ -1,9 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <!-- ... (head content, styles - same as before) ... -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Docker Log Monitor</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Link to external stylesheet if you create one -->
+    <!-- <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"> -->
     <style>
         /* Basic styling */
         body {
@@ -33,7 +35,11 @@
             border-bottom: 1px solid #eee;
             padding-bottom: 10px;
             margin-top: 0; /* Adjust top margin */
+            margin-bottom: 10px; /* Reduce bottom margin */
         }
+        h1 { font-size: 1.6em; } /* Slightly larger H1 */
+        h2 { margin-top: 20px;} /* Add space above H2 */
+
         pre {
             background: #eee;
             padding: 10px;
@@ -45,7 +51,96 @@
             overflow-y: auto;
             border: 1px solid #ddd;
         }
-        .scan-info p { margin: 5px 0; font-size: 0.9em; color: #555; }
+
+        /* --- Top Header Section Styles --- */
+        .scan-info-header {
+            display: flex;
+            justify-content: space-between; /* Pushes items apart */
+            align-items: flex-start; /* Align items to the top */
+            flex-wrap: wrap; /* Allow wrapping on smaller screens */
+            gap: 15px; /* Add space between left/right content when wrapped */
+            margin-bottom: 15px; /* Space below header section */
+        }
+        .header-content {
+            flex-basis: 60%; /* Give more space to left content initially */
+            min-width: 250px; /* Prevent it getting too small */
+        }
+        .header-content p { margin: 5px 0; font-size: 0.9em; color: #555; }
+
+        .header-actions {
+            flex-basis: 35%; /* Remaining space */
+            min-width: 150px; /* Adjusted min-width */
+            display: flex;
+            flex-direction: column; /* Stack links vertically */
+            align-items: flex-end; /* Align items to the right */
+            gap: 8px; /* Space between links */
+        }
+        .header-link { /* Style for Settings/Help links */
+            font-size: 0.9em;
+            color: #007bff;
+            text-decoration: none;
+            padding: 3px 0; /* Reduced vertical padding */
+            white-space: nowrap; /* Prevent wrapping */
+        }
+        .header-link:hover { text-decoration: underline; }
+        /* --- End Top Header Section Styles --- */
+
+
+        /* Scan Running Indicator */
+        .scan-in-progress {
+            color: #0056b3;
+            font-size: 0.9em;
+            font-weight: bold;
+            background-color: #e7f3ff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+
+        /* Flash Messages */
+        .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .flash.info { background-color: #cce5ff; color: #004085; border: 1px solid #b8daff; }
+        .flash.warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+
+        /* Scheduler Controls */
+        .scheduler-controls {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+            display: flex; /* Use flexbox for buttons */
+            flex-wrap: wrap; /* Allow buttons to wrap */
+            gap: 10px; /* Space between buttons/forms */
+            align-items: center; /* Align items vertically */
+        }
+        .scheduler-controls form { display: inline-block; margin: 0;} /* Remove bottom margin from forms */
+        .scheduler-controls button {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            border: none;
+            font-weight: bold;
+            white-space: nowrap; /* Prevent text wrapping inside buttons */
+        }
+        .button-pause { background-color: #ffc107; color: #333; }
+        .button-pause:hover { background-color: #e0a800; }
+        .button-resume { background-color: #28a745; color: white; }
+        .button-resume:hover { background-color: #218838; }
+        .button-stop { background-color: #dc3545; color: white; }
+        .button-stop:hover { background-color: #c82333; }
+        .button-start-now { background-color: #17a2b8; color: white; }
+        .button-start-now:hover { background-color: #138496; }
+        .scheduler-controls p {
+             margin: 0; /* Remove margin from status messages */
+             font-size: 0.9em;
+             color: #6c757d;
+             flex-basis: 100%; /* Allow status text to take full width if wrapped */
+             margin-top: 5px; /* Add a little space if it wraps */
+        }
+
 
         /* Container List Styles */
         .container-list { list-style: none; padding: 0; }
@@ -56,7 +151,6 @@
             margin-bottom: 15px;
             padding: 15px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            /* Add data-status styles */
             border-left: 5px solid transparent; /* Default border */
         }
         /* Style based on data-status */
@@ -88,6 +182,7 @@
             height: 12px;
             border-radius: 50%;
             flex-shrink: 0; /* Prevent dot from shrinking */
+            margin-right: 5px; /* Space between dot and name */
         }
         /* Status dot colors */
         .status-healthy { background-color: #28a745; box-shadow: 0 0 5px #28a745; }
@@ -99,136 +194,82 @@
              margin-top: 10px;
              padding-top: 10px;
              border-top: 1px dashed #eee;
-             /* Hide/show controlled by data-status attribute and CSS below */
-             display: none;
+             display: none; /* Hide by default */
         }
+        /* Show details only for unhealthy/error */
         .container-item[data-status="unhealthy"] .abnormality-details,
         .container-item[data-status*="error"] .abnormality-details {
-             display: block; /* Show details only for unhealthy/error */
+             display: block;
         }
 
         .details-section { margin-bottom: 10px; }
         .details-section strong { display: block; margin-bottom: 5px; color: #444; }
         .manage-link {
             font-size: 0.9em;
-            margin-left: auto; /* Pushes link to the right on wider screens */
-            padding: 3px 8px; /* Add some padding */
+            margin-left: auto; /* Pushes link to the right */
+            padding: 3px 8px;
             border: 1px solid #007bff;
             color: #007bff;
             text-decoration: none;
             border-radius: 4px;
-            white-space: nowrap; /* Prevent button text wrapping */
-            /* Hide/show controlled by Jinja if block initially */
+            white-space: nowrap;
         }
         .manage-link:hover { background-color: #e7f3ff; }
         .timestamp { font-size: 0.8em; color: #777; margin-top: 5px; display: block;}
 
-        /* Flash Messages */
-        .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
-        .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .flash.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .flash.info { background-color: #cce5ff; color: #004085; border: 1px solid #b8daff; }
-        .flash.warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
-
-
-        /* Model Selector Form */
-        .model-selector-form {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px solid #eee;
-        }
-        .model-selector-form label { font-weight: bold; }
-        .model-selector-form select { padding: 5px; border-radius: 4px; border: 1px solid #ccc; min-width: 150px; }
-        .model-selector-form button { padding: 5px 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px;}
-        .model-selector-form button:hover { background-color: #0056b3;}
-
-        /* Scan Running Indicator */
-        .scan-in-progress {
-            color: #0056b3;
-            font-size: 0.9em;
-            font-weight: bold;
-            background-color: #e7f3ff;
-            padding: 5px 10px;
-            border-radius: 4px;
-            display: inline-block;
-            margin-top: 5px;
-            margin-bottom: 5px;
-        }
 
         /* --- Responsive Styles --- */
         @media (max-width: 768px) {
-            body {
-                padding: 5px; /* Less padding on mobile */
-            }
-            .container {
-                padding: 10px;
-            }
-            h1 { font-size: 1.5em; }
-            h2 { font-size: 1.25em; }
+            body { padding: 5px; }
+            .container { padding: 10px; }
+            h1 { font-size: 1.4em; }
+            h2 { font-size: 1.2em; }
 
-            .container-header {
-                 gap: 8px; /* Slightly reduce gap */
-            }
-            .container-name {
-                font-size: 1em; /* Slightly smaller name */
-                flex-grow: 1; /* Allow name to take available space */
-            }
-            .manage-link {
-                margin-left: 0; /* Remove auto margin */
-                margin-top: 5px; /* Add space if it wraps */
-                width: 100%; /* Make button full width if needed */
-                text-align: center; /* Center text in button */
-            }
-            pre {
-                 font-size: 0.8em; /* Even smaller pre text */
-            }
-            .model-selector-form select {
-                 min-width: 120px; /* Adjust dropdown width */
-            }
+             /* Stack header content and actions vertically on medium screens */
+            .scan-info-header { flex-direction: column; align-items: stretch; }
+            .header-actions { align-items: flex-start; } /* Align actions left when stacked */
+
+            .scheduler-controls { justify-content: center; } /* Center buttons */
+            .scheduler-controls button { flex-grow: 1; /* Allow buttons to grow */ }
+
+            .container-header { gap: 8px; }
+            .container-name { font-size: 1em; flex-grow: 1; }
+            .manage-link { margin-left: 0; margin-top: 5px; width: auto; /* Don't make full width */ }
+            pre { font-size: 0.8em; }
         }
 
         @media (max-width: 480px) {
-             .scan-info p { font-size: 0.85em; }
+             h1 { font-size: 1.3em;}
+             .header-content p { font-size: 0.85em; }
              .container-name { font-size: 0.95em; }
-             .container-id-short { display: none; } /* Hide short ID on very small screens */
-             .model-selector-form { flex-direction: column; align-items: stretch; } /* Stack form elements */
-             .model-selector-form button { margin-top: 5px; }
+             .container-id-short { display: none; } /* Hide short ID */
+             .scheduler-controls button { min-width: 120px; } /* Ensure buttons have min width */
         }
-  	.button-start-now { background-color: #17a2b8; color: white; } /* Teal color */
-        .button-start-now:hover { background-color: #138496; }
-        .button-stop { background-color: #dc3545; color: white; } /* Red for stop */
-        .button-stop:hover { background-color: #c82333; }
-        .scheduler-controls { margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; }
-        .scheduler-controls button { padding: 8px 12px; cursor: pointer; border-radius: 4px; border: none; font-weight: bold; }
-        .button-pause { background-color: #ffc107; color: #333; }
-        .button-pause:hover { background-color: #e0a800; }
-        .button-resume { background-color: #28a745; color: white; }
-        .button-resume:hover { background-color: #218838; }
-        .scheduler-controls p em { color: #6c757d; font-size: 0.9em;}
 
-        /* Responsive adjustments for buttons if needed */
-        @media (max-width: 768px) {
-            .scheduler-controls form { display: block !important; margin-bottom: 5px;}
-            .scheduler-controls button { width: 100%; }
-        }
-	
     </style>
 </head>
 <body>
-    <!-- Section for Scan Info and Flash Messages -->
+    <!-- Section for Scan Info and Controls -->
     <div class="container scan-info">
-        <h1>Docker Container Health</h1>
-        <p>Last Scan Status: {{ scan_status if scan_status else "Not run yet" }}</p>
+        <!-- Header Wrapper -->
+        <div class="scan-info-header">
+            <div class="header-content">
+                <h1>Docker Container Health</h1>
+                <p>Last Scan Status: {{ scan_status if scan_status else "Not run yet" }}</p>
+                {% if scan_is_running %}
+                    <p class="scan-in-progress"><em>Scan currently in progress...</em></p>
+                {% endif %}
+                <p>Next Scan scheduled around: {{ next_scan_time if next_scan_time else "N/A" }} (Times in {{ timezone }})</p>
+            </div>
 
-	{% if scan_is_running %}
-            <p class="scan-in-progress"><em>Scan currently in progress... (Page will refresh)</em></p>
-	{% endif %}
-
-        <p>Next Scan scheduled around: {{ next_scan_time if next_scan_time else "N/A" }} (Times in {{ timezone }})</p>
+            <div class="header-actions">
+                <!-- Settings Link -->
+                <a href="{{ url_for('settings') }}" class="header-link">Settings</a>
+                <!-- Help Link -->
+                {# <a href="{{ url_for('help_page') }}" class="header-link">Help / Manual</a> #}
+                <!-- Model selector form REMOVED from here -->
+            </div>
+        </div> <!-- End scan-info-header -->
 
          <!-- Display Flash Messages -->
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -239,60 +280,33 @@
             {% endif %}
         {% endwith %}
 
-        <!-- === NEW: Model Selector Form === -->
-        <form method="POST" action="{{ url_for('set_model') }}" class="model-selector-form">
-            <label for="model-select">Ollama Model:</label>
-            <select name="selected_model" id="model-select">
-                {% if available_models %}
-                    {% for model_name in available_models %}
-                        <option value="{{ model_name }}" {% if model_name == current_model %}selected{% endif %}>
-                            {{ model_name }}
-                        </option>
-                    {% endfor %}
-                     {# Optionally add the current model even if not in list, maybe marked? #}
-                     {% if current_model not in available_models %}
-                         <option value="{{ current_model }}" selected>
-                             {{ current_model }} (Current - Not in last scan list)
-                         </option>
-                     {% endif %}
-                {% elif current_model %}
-                     {# Fallback if model list fetch failed but we know the current one #}
-                     <option value="{{ current_model }}" selected>{{ current_model }} (List unavailable)</option>
-                {% else %}
-                     <option value="" disabled selected>No models available</option>
-                {% endif %}
-            </select>
-            <button type="submit">Set Model</button>
-        </form>
-        <!-- === End Model Selector Form === -->
-<!-- === NEW: Scheduler Control Buttons === -->
- <div class="scheduler-controls">
-
+        <!-- Scheduler Control Buttons -->
+        <div class="scheduler-controls">
             <!-- Pause/Resume Schedule Buttons -->
-            {% if job_state == 'running' %} {# Job is scheduled to run #}
-                <form method="POST" action="{{ url_for('pause_schedule') }}" style="display: inline-block; margin-right: 10px;">
+            {% if job_state == 'running' %}
+                <form method="POST" action="{{ url_for('pause_schedule') }}">
                     <button type="submit" class="button-pause">Pause Schedule</button>
                 </form>
-            {% elif job_state == 'paused' %} {# Job exists but is paused #}
-                <form method="POST" action="{{ url_for('resume_schedule') }}" style="display: inline-block; margin-right: 10px;">
+            {% elif job_state == 'paused' %}
+                <form method="POST" action="{{ url_for('resume_schedule') }}">
                     <button type="submit" class="button-resume">Resume Schedule</button>
                 </form>
             {% endif %}
 
-            <!-- Stop Current Scan Button (only shown if scan is actively running *now*) -->
+            <!-- Stop Current Scan Button -->
             {% if scan_is_running %}
-                <form method="POST" action="{{ url_for('stop_current_scan') }}" style="display: inline-block;">
+                <form method="POST" action="{{ url_for('stop_current_scan') }}">
                     <button type="submit" class="button-stop">Stop Current Scan</button>
                 </form>
             {% endif %}
-            <!-- === NEW: Start Scan Now Button === -->
-            {# Show only if scheduler is running AND no scan is currently executing #}
+
+            <!-- Start Scan Now Button -->
             {% if not scan_is_running and job_state != 'scheduler_stopped' and job_state != 'error' %}
-                <form method="POST" action="{{ url_for('trigger_scan') }}" style="display: inline-block;">
-                    <button type="submit" class="button-start-now">Start New Scan Now</button>
+                <form method="POST" action="{{ url_for('trigger_scan') }}">
+                    <button type="submit" class="button-start-now">Start Scan Now</button>
                 </form>
             {% endif %}
-            <!-- === END: Start Scan Now Button === -->
+
             <!-- Status Messages for scheduler/job state -->
             {% if job_state == 'stopped' %}
                 <p><em>Scan job is stopped (not scheduled). Restart application to reschedule.</em></p>
@@ -301,19 +315,19 @@
             {% elif job_state == 'error' %}
                  <p><em>Error checking scan job status.</em></p>
             {% endif %}
-        </div>
-        <!-- === End Scheduler Control Buttons === -->
-    </div>
+        </div><!-- End scheduler-controls -->
+
+    </div><!-- End scan-info container -->
+
 
     <!-- Section for the Container List -->
     <div class="container">
         <h2>Container Status</h2>
-        <!-- ... (The existing container list loop: {% if container_statuses %} ... {% endif %}) ... -->
         {% if container_statuses %}
             <ul class="container-list">
                 {% for container_id, data in container_statuses.items() %}
-                    <li class="container-item">
-                       {# ... header ... #}
+                    {# Add data-status attribute for easier CSS targeting #}
+                    <li class="container-item" data-status="{{ data.status }}">
                         <div class="container-header">
                             {# Status Dot #}
                             {% if data.status == 'healthy' %}<span class="status-dot status-healthy" title="Healthy"></span>
@@ -321,36 +335,52 @@
                             {% elif data.status == 'pending' %}<span class="status-dot status-pending" title="Scan Pending"></span>
                             {% else %}<span class="status-dot status-error" title="{{ data.status | replace('_', ' ') | title }}"></span>
                             {% endif %}
+
                             {# Name and ID #}
                             <span class="container-name">{{ data.name }}</span>
                             <span class="container-id-short">({{ container_id[:12] }})</span>
-                            {# Manage Link #}
-                            {% if data.status == 'unhealthy' and data.db_id %}<a href="{{ url_for('manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a>{% endif %}
-                        </div>
-                       {# ... details ... #}
-                        {% if data.status == 'unhealthy' and data.details %}
+
+                            {# Manage Link - Pushed right by margin-left: auto #}
+                            {% if data.status == 'unhealthy' and data.db_id %}
+                                <a href="{{ url_for('manage_abnormality', abnormality_id=data.db_id) }}" class="manage-link">Manage Issue</a>
+                            {% endif %}
+                        </div> {# End container-header #}
+
+                        {# Abnormality Details - Shown only for unhealthy/error via CSS #}
                         <div class="abnormality-details">
-                           {# ... analysis, snippet, timestamp ... #}
-                            <div class="details-section"><strong>Ollama Analysis:</strong> {{ data.details.analysis }}</div>
-                            <div class="details-section"><strong>Log Snippet:</strong><pre>{{ data.details.snippet }}</pre></div>
-                            <div class="details-section"><small>Detected/Updated: {{ data.details.timestamp.strftime('%Y-%m-%d %H:%M:%S') if data.details.timestamp else 'N/A' }}</small></div>
-                        </div>
-                        {% elif data.status != 'healthy' and data.status != 'pending' and data.details %}
-                         <div class="abnormality-details">
-                             <div class="details-section"><strong>Status Detail:</strong> {{ data.details.analysis }}</div>
-                             {% if data.details.snippet %}<div class="details-section"><strong>Log Snippet:</strong><pre>{{ data.details.snippet }}</pre></div>{% endif %}
-                         </div>
-                        {% endif %}
+                           {% if data.details %}
+                                <div class="details-section">
+                                    <strong>{% if data.status == 'unhealthy' %}Ollama Analysis{% else %}Status Detail{% endif %}:</strong>
+                                    {{ data.details.analysis }}
+                                </div>
+                                {% if data.details.snippet %}
+                                <div class="details-section">
+                                    <strong>Log Snippet:</strong>
+                                    <pre>{{ data.details.snippet }}</pre>
+                                </div>
+                                {% endif %}
+                                {% if data.details.timestamp %}
+                                <div class="details-section">
+                                    <small>Detected/Updated: {{ data.details.timestamp.strftime('%Y-%m-%d %H:%M:%S') if data.details.timestamp else 'N/A' }}</small> {# Added check for timestamp #}
+                                </div>
+                                {% endif %}
+                            {% endif %}
+                        </div> {# End abnormality-details #}
                     </li>
                 {% endfor %} {# End of container loop #}
             </ul>
         {% else %}
             <p>No running containers detected or initial scan pending.</p>
         {% endif %} {# End of container_statuses check #}
+    </div> <!-- End container list container -->
 
-    </div>
-
-    <!-- ... (script tag - same as before) ... -->
-    <script>setTimeout(() => { window.location.reload(); }, 60000);</script>
+    <!-- Auto-refresh script -->
+    <script>
+        // Refresh every 60 seconds ONLY if a scan is NOT currently running
+        var isScanRunning = {{ scan_is_running | tojson }}; // Use tojson filter for safety
+        if (!isScanRunning) {
+            setTimeout(() => { window.location.reload(); }, 60000); // 60 seconds
+        }
+    </script>
 </body>
 </html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>History - {{ container_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        /* Basic styling */
+        body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
+        *, *:before, *:after { box-sizing: border-box; }
+        .container { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; max-width: 1200px; margin-left: auto; margin-right: auto; }
+        h1, h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 0; }
+        pre { background: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.85em; max-height: 200px; overflow-y: auto; border: 1px solid #ddd; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; font-size: 0.9em; }
+        .back-link:hover { text-decoration: underline; }
+
+        /* History List Styles */
+        .history-list { list-style: none; padding: 0; }
+        .history-item { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 15px; padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border-left: 5px solid #ccc; /* Default border */ }
+
+        /* Dynamic Border Colors - Applied via <style> block below */
+
+        .history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 10px;}
+        .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; text-transform: uppercase; color: white; white-space: nowrap; }
+
+        /* Dynamic Badge Colors - Applied via <style> block below */
+        /* Placeholders */
+        .status-unresolved { background-color: red; }
+        .status-resolved { background-color: green; }
+        .status-ignored { background-color: orange; color: #333; } /* Keep text dark for yellow */
+
+        .timestamps { font-size: 0.85em; color: #666; text-align: right; }
+        .detail-block { margin-bottom: 10px; }
+        .detail-block strong { display: block; color: #444; margin-bottom: 3px; font-size: 0.9em;}
+        .detail-block p { margin: 0; font-size: 0.95em; }
+        .detail-block pre { font-size: 0.8em; }
+
+        /* NEW: Manage Link Styling */
+        .manage-link-history {
+             font-size: 0.8em;
+             margin-left: 15px;
+             padding: 2px 6px;
+             border: 1px solid #007bff;
+             color: #007bff;
+             text-decoration: none;
+             border-radius: 4px;
+             white-space: nowrap;
+        }
+        .manage-link-history:hover { background-color: #e7f3ff; }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .history-header { flex-direction: column; align-items: flex-start; }
+            .timestamps { text-align: left; margin-top: 5px; }
+            .manage-link-history { margin-left: 0; margin-top: 5px; display: inline-block;} /* Adjust link on mobile */
+        }
+    </style>
+
+    <!-- === NEW: Dynamic Color Styles === -->
+    {% if color_settings %}
+    <style>
+        .history-item[data-status="resolved"] { border-left-color: {{ color_settings.color_healthy | default('#28a745') }}; }
+        .status-resolved { background-color: {{ color_settings.color_healthy | default('#28a745') }}; }
+
+        .history-item[data-status="unresolved"] { border-left-color: {{ color_settings.color_unhealthy | default('#dc3545') }}; }
+        .status-unresolved { background-color: {{ color_settings.color_unhealthy | default('#dc3545') }}; }
+
+        .history-item[data-status="ignored"] { border-left-color: {{ color_settings.color_pending | default('#ffc107') }}; } /* Use pending/warning color */
+        .status-ignored { background-color: {{ color_settings.color_pending | default('#ffc107') }}; color: #333; } /* Ensure text contrast */
+
+        /* Add styles if manage.html also needs dynamic colors passed/applied */
+    </style>
+    {% endif %}
+    <!-- === END: Dynamic Color Styles === -->
+
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('index') }}" class="back-link">« Back to Dashboard</a>
+        <h1>Abnormality History</h1>
+        <h2>{{ container_name }} <small style="color: #777;">({{ container_id[:12] }})</small></h2>
+
+        {% if records %}
+            <ul class="history-list">
+                {% for record in records %}
+                    <li class="history-item" data-status="{{ record.status }}">
+                        <div class="history-header">
+                            <div> {# Wrap badge and potential link #}
+                                <span class="status-badge status-{{ record.status }}">
+                                    {{ record.status | replace('_', ' ') | title }}
+                                </span>
+                                {# === NEW: Manage Link for Unresolved === #}
+                                {% if record.status == 'unresolved' %}
+                                    <a href="{{ url_for('manage_abnormality', abnormality_id=record.id) }}" class="manage-link-history">Manage Issue</a>
+                                {% endif %}
+                                {# === END: Manage Link === #}
+                            </div>
+                            <div class="timestamps">
+                                {% if record.first_detected_timestamp %}
+                                    First: {{ record.first_detected_timestamp.astimezone(timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z') if record.first_detected_timestamp and timezone_obj else record.first_detected_timestamp.strftime('%Y-%m-%d %H:%M:%S') if record.first_detected_timestamp else 'N/A' }}
+                                    <br>
+                                {% endif %}
+                                Last: {{ record.last_detected_timestamp.astimezone(timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z') if record.last_detected_timestamp and timezone_obj else record.last_detected_timestamp.strftime('%Y-%m-%d %H:%M:%S') if record.last_detected_timestamp else 'N/A' }}
+                            </div>
+                        </div>
+
+                        {# Details - same as before #}
+                        <div class="detail-block">
+                            <strong>Ollama Analysis:</strong>
+                            <p>{{ record.ollama_analysis | default('(Not Available)', true) }}</p>
+                        </div>
+                        <div class="detail-block">
+                            <strong>Log Snippet:</strong>
+                            <pre>{{ record.log_snippet | default('(Not Available)', true) }}</pre>
+                        </div>
+                         {% if record.resolution_notes %}
+                         <div class="detail-block">
+                            <strong>Resolution Notes:</strong>
+                            <pre>{{ record.resolution_notes }}</pre>
+                        </div>
+                         {% endif %}
+                    </li>
+                {% endfor %} {# End record loop #}
+            </ul>
+        {% else %}
+            <p>No abnormality history found for this container.</p>
+        {% endif %} {# End records check #}
+    </div>
+</body>
+</html>

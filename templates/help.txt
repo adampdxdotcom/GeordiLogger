@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docker Log Monitor - Help</title>
+    <!-- Link to external stylesheet if you create one -->
+    <!-- <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"> -->
+    <style>
+        /* Reusing styles similar to index/manage pages */
+        body {
+            font-family: sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 10px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        *, *:before, *:after {
+            box-sizing: border-box;
+        }
+        .container {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            max-width: 900px; /* Adjusted max-width for readability */
+            margin-left: auto;
+            margin-right: auto;
+        }
+        h1, h2, h3 {
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            margin-top: 20px;
+            margin-bottom: 15px;
+        }
+        h1 { margin-top: 0; }
+        pre {
+            background: #eee;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 0.9em;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            font-family: monospace; /* Ensure monospace for code */
+        }
+        code { /* Style for inline code */
+            background-color: #e9e9e9;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        ul, ol {
+            margin-left: 20px;
+            margin-bottom: 15px;
+            padding-left: 15px; /* Indent lists */
+        }
+        li {
+            margin-bottom: 8px; /* Spacing between list items */
+        }
+        strong { /* Make sure strong stands out */
+             color: #111;
+        }
+        a {
+             color: #007bff;
+             text-decoration: none;
+        }
+        a:hover {
+             text-decoration: underline;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #007bff;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .env-var { /* Specific style for environment variables */
+            font-weight: bold;
+            color: #c7254e; /* Example color */
+            font-family: monospace;
+        }
+
+        /* Responsive adjustments */
+         @media (max-width: 768px) {
+            body {
+                padding: 5px;
+            }
+            .container {
+                padding: 15px;
+            }
+            h1 { font-size: 1.5em; }
+            h2 { font-size: 1.25em; }
+            h3 { font-size: 1.1em; }
+            pre { font-size: 0.85em; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('index') }}" class="back-link">« Back to Dashboard</a>
+        <h1>Help / User Manual</h1>
+
+        <!-- User Manual Content -->
+        <section id="introduction">
+            <h2>1. Introduction</h2>
+            <p>The Docker Log Monitor is a Python application designed to automatically scan the logs of running Docker containers, analyze them for potential issues using an Ollama Large Language Model (LLM), and present the findings via a simple web interface. It helps administrators identify potential problems like errors, crashes, or security concerns within their containerized applications without manually checking logs. Abnormalities are stored in a database and can be managed (resolved, ignored) through the web UI.</p>
+        </section>
+
+        <section id="features">
+            <h2>2. Features</h2>
+            <ul>
+                <li><strong>Automated Log Scanning:</strong> Periodically scans logs of all running Docker containers.</li>
+                <li><strong>AI-Powered Analysis:</strong> Uses a configurable Ollama model (e.g., <code>phi3</code>, <code>llama3</code>) to analyze log snippets for errors, warnings, or suspicious patterns.</li>
+                <li><strong>Web Interface:</strong> Provides a dashboard to view the status of scanned containers (Healthy, Unhealthy, Error).</li>
+                <li><strong>Abnormality Management:</strong> Lists detected abnormalities with details (log snippet, analysis, timestamps). Allows users to mark abnormalities as 'resolved' or 'ignored' and add notes.</li>
+                <li><strong>Database Storage:</strong> Persists detected abnormalities in an SQLite database.</li>
+                <li><strong>Scheduler Control:</strong> Allows pausing, resuming, and manually triggering log scans via the web UI.</li>
+                <li><strong>Model Selection:</strong> Allows choosing the Ollama model to use for analysis via the web UI.</li>
+                <li><strong>Configurable:</strong> Scan interval, Ollama endpoint, log lines fetched, timezone, etc., are configurable via environment variables.</li>
+            </ul>
+        </section>
+
+        <section id="requirements">
+            <h2>3. Requirements</h2>
+             <ul>
+                <li><strong>Docker:</strong> Required. A running Docker daemon accessible via its socket (<code>/var/run/docker.sock</code>). Docker Compose is recommended.</li>
+                <li><strong>Ollama:</strong> A running Ollama instance accessible via HTTP <em>from the Docker container</em>. (See <a href="https://ollama.com" target="_blank" rel="noopener noreferrer">ollama.com</a>). Ensure the desired model (e.g., <code>phi3</code>, <code>llama2-uncensored:7b</code>) is downloaded (<code>ollama pull <model_name></code>).</li>
+                <li><strong>Application Code:</strong> The Python files (<code>app.py</code>, <code>db.py</code>, <code>analyzer.py</code>), <code>requirements.txt</code>, <code>Dockerfile</code>, <code>docker-compose.yml</code>, and the <code>templates</code> directory containing <code>index.html</code> and <code>manage.html</code>.</li>
+                <li><strong>Permissions:</strong> The Docker daemon needs access to the Docker socket (usually handled by Docker installation).</li>
+            </ul>
+        </section>
+
+        <section id="installation">
+             <h2>4. Installation & Setup (Using Docker - Recommended)</h2>
+            <ol>
+                <li><strong>Get the Code:</strong> Clone the repository or download all source files (<code>app.py</code>, <code>db.py</code>, <code>analyzer.py</code>, <code>requirements.txt</code>, <code>Dockerfile</code>, <code>docker-compose.yml</code>).</li>
+                <li><strong>Create <code>templates</code> Directory:</strong> In the same directory as <code>app.py</code>, create a folder named <code>templates</code>.</li>
+                <li><strong>Place HTML Files:</strong> Move <code>index.html</code> and <code>manage.html</code> (and this <code>help.html</code> file) into the <code>templates</code> directory.</li>
+                <li><strong>Review <code>docker-compose.yml</code>:</strong>
+                    <ul>
+                        <li><strong>Verify <code>OLLAMA_API_URL</code>:</strong> This is crucial. Edit the <code>environment</code> section. Examples:
+                            <ul>
+                                <li>Docker host (Linux): <code>http://<docker_host_ip>:11434/api/generate</code> (Find IP via <code>ip addr show docker0</code>, often <code>172.17.0.1</code>)</li>
+                                <li>Docker host (Mac/Win - Docker Desktop): <code>http://host.docker.internal:11434/api/generate</code></li>
+                                <li>Ollama in another container (same network): <code>http://ollama:11434/api/generate</code> (using service name)</li>
+                            </ul>
+                        </li>
+                        <li><strong>Change <code>FLASK_SECRET_KEY</code>:</strong> Set a long, random, unique string. <strong>Do not leave the default.</strong></li>
+                        <li><strong>Check Volume Mounts:</strong>
+                            <ul>
+                                <li>Database Volume: Ensure it targets <code>/app/data</code>: <pre>volumes:
+  # ... other volumes
+  - log_monitor_data:/app/data</pre>
+                                </li>
+                                <li>Code Volume (Optional - For Development): The example <code>- /opt/docker/geordi:/app</code> mounts local code. Remove this for production. If kept, ensure the host path is correct.</li>
+                            </ul>
+                        </li>
+                        <li><strong>Adjust Other Environment Variables:</strong> Change <code>TZ</code>, <code>OLLAMA_MODEL</code>, <code>SCAN_INTERVAL_MINUTES</code>, <code>LOG_LINES_TO_FETCH</code> as needed.</li>
+                    </ul>
+                </li>
+                <li><strong>(Optional) Define Network:</strong> If running Ollama in another container, configure Docker networks in <code>docker-compose.yml</code>.</li>
+            </ol>
+        </section>
+
+         <section id="configuration">
+            <h2>5. Configuration (via <code>docker-compose.yml</code>)</h2>
+            <p>Configuration is primarily done through the <code>environment</code> section of the service (e.g., <code>geordi</code>) in your <code>docker-compose.yml</code> file:</p>
+            <ul>
+                <li><span class="env-var">SCAN_INTERVAL_MINUTES</span>: How often to scan logs (e.g., <code>300</code>).</li>
+                <li><span class="env-var">OLLAMA_API_URL</span>: <strong>(Mandatory Check)</strong> Full URL to Ollama, accessible from the container.</li>
+                <li><span class="env-var">OLLAMA_MODEL</span>: Ollama model name (e.g., <code>phi3</code>).</li>
+                <li><span class="env-var">LOG_LINES_TO_FETCH</span>: Number of recent log lines to fetch (e.g., <code>100</code>).</li>
+                <li><span class="env-var">OLLAMA_TIMEOUT</span>: Max seconds to wait for Ollama API (Default in code: <code>300</code>). Can be set here to override.</li>
+                <li><span class="env-var">TZ</span>: Timezone (e.g., <code>America/Los_Angeles</code>, <code>UTC</code>).</li>
+                <li><span class="env-var">FLASK_SECRET_KEY</span>: <strong>(Mandatory Change)</strong> Long, random secret string.</li>
+                <li><span class="env-var">LOG_LEVEL</span>: Log detail level (e.g., <code>INFO</code>, <code>DEBUG</code>).</li>
+            </ul>
+            <p><em>(Environment variables in <code>docker-compose.yml</code> override defaults set in the <code>Dockerfile</code>)</em></p>
+        </section>
+
+        <section id="running">
+            <h2>6. Running the Application (Using Docker Compose)</h2>
+            <ol>
+                <li><strong>Navigate:</strong> Open a terminal in the directory containing <code>docker-compose.yml</code>.</li>
+                <li><strong>Build and Start:</strong>
+                    <pre>docker-compose up --build -d</pre>
+                    (Use <code>--build</code> on first run or after code changes if not using the code bind mount. <code>-d</code> runs in background).
+                </li>
+                <li><strong>Access:</strong> Open your browser to <code>http://<your_host_ip>:<host_port></code> (e.g., <code>http://localhost:5001</code> if using default mapping).</li>
+                <li><strong>View Logs:</strong>
+                     <pre>docker-compose logs -f <service_name>  # e.g., docker-compose logs -f geordi</pre>
+                </li>
+                <li><strong>Stop:</strong>
+                     <pre>docker-compose down</pre>
+                </li>
+            </ol>
+        </section>
+
+        <section id="usage">
+            <h2>7. Using the Web Interface</h2>
+            <p>Access the dashboard via the URL from step 6.3.</p>
+            <ul>
+                <li><strong>Dashboard (<code>/</code>):</strong> Shows container statuses, scan info, model selector, and scheduler controls. Click unhealthy containers to manage issues.</li>
+                <li><strong>Manage Abnormality (<code>/manage/<id></code>):</strong> View details of an issue, update status (resolved, ignored, unresolved), and add notes.</li>
+            </ul>
+             <h3>Scheduler Controls</h3>
+             <ul>
+                 <li><strong>Pause/Resume Schedule:</strong> Toggles automatic background scans.</li>
+                 <li><strong>Stop Current Scan:</strong> Attempts to gracefully stop an ongoing scan (if running) and pauses the schedule.</li>
+                 <li><strong>Start New Scan Now:</strong> Manually triggers an immediate scan (if none is running and the scheduler is active).</li>
+             </ul>
+        </section>
+
+        <section id="troubleshooting">
+            <h2>8. Troubleshooting</h2>
+            <ul>
+                <li><strong>Cannot connect to Docker daemon:</strong> Ensure Docker is running and the socket mount in <code>docker-compose.yml</code> is correct (<code>/var/run/docker.sock:/var/run/docker.sock:ro</code>).</li>
+                <li><strong>Cannot connect to Ollama:</strong> Verify <code>OLLAMA_API_URL</code> in <code>docker-compose.yml</code>. Test connectivity from *inside* the container: <code>docker exec -it <container_name> curl <OLLAMA_API_URL></code>. Check Ollama service status and firewalls.</li>
+                <li><strong>Database Errors / Issues not Saving:</strong> Ensure the database volume mount in <code>docker-compose.yml</code> targets the directory <code>/app/data</code>. Check container logs for SQLite errors.</li>
+                <li><strong>Web UI Errors (500, TemplateNotFound):</strong> Ensure the <code>templates</code> directory exists and contains <code>index.html</code>, <code>manage.html</code>, and <code>help.html</code>.</li>
+                <li><strong>Code Changes Not Reflected:</strong> If *not* using the code bind mount (e.g., <code>- /opt/docker/geordi:/app</code>), rebuild the image: <code>docker-compose up --build -d</code>.</li>
+            </ul>
+        </section>
+        <!-- End User Manual Content -->
+
+    </div>
+</body>
+</html>

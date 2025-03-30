@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Docker Log Monitor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        /* Basic styling */
+        body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
+        *, *:before, *:after { box-sizing: border-box; }
+        .container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; max-width: 900px; margin-left: auto; margin-right: auto; }
+        h1, h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 0; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; font-size: 0.9em; }
+        .back-link:hover { text-decoration: underline; }
+
+        /* Form Styling */
+        .settings-form label, .api-key-regen-section label { display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold; color: #555; }
+        .settings-form input[type="text"],
+        .settings-form input[type="password"],
+        .settings-form input[type="number"],
+        .settings-form select,
+        .settings-form textarea {
+            width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95em;
+        }
+        .settings-form textarea { min-height: 150px; font-family: monospace; }
+        .settings-form select[multiple] { min-height: 150px; }
+        .settings-form input[type="color"] { padding: 0; height: 30px; width: 60px; border: 1px solid #ccc; border-radius: 4px; vertical-align: middle; margin-left: 10px;}
+        .settings-form .color-setting { display: flex; align-items: center; gap: 10px; margin-bottom: 5px;}
+        .settings-form .help-text, .api-key-regen-section .help-text { font-size: 0.85em; color: #666; margin-top: 3px; }
+
+        .api-key-input-group { margin-bottom: 5px;}
+        /* Section for Regen Button */
+        .api-key-regen-section { margin-top: 20px; padding-top: 20px; border-top: 1px dashed #ccc; }
+        .api-key-regen-form button { padding: 8px 10px; font-size: 0.9em; white-space: nowrap; }
+
+        .settings-form button[type="submit"] { /* Main save button */
+            margin-top: 25px; padding: 10px 20px; background-color: #28a745; color: white;
+            border: none; border-radius: 4px; font-size: 1em; cursor: pointer; transition: background-color 0.2s;
+        }
+        .settings-form button[type="submit"]:hover { background-color: #218838; }
+        .button-secondary { background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .button-secondary:hover { background-color: #5a6268; }
+
+        /* Flash Messages */
+        .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .flash.info { background-color: #cce5ff; color: #004085; border: 1px solid #b8daff; }
+        .flash.warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+
+        @media (max-width: 600px) {
+            .container { padding: 15px; }
+            h1 { font-size: 1.5em; }
+            .api-key-regen-form button { margin-top: 5px; width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('index') }}" class="back-link">« Back to Dashboard</a>
+        <h1>Settings</h1>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {# === MAIN Settings form STARTS HERE === #}
+        <form method="POST" action="{{ url_for('settings') }}" class="settings-form">
+
+            <h2>Ollama Configuration</h2>
+            {# ... Ollama Model, API URL, Prompt ... (Same as before) #}
+            <label for="ollama_model">Ollama Model:</label>
+            <select name="ollama_model" id="ollama_model"> ... </select>
+            <p class="help-text">...</p>
+            <label for="ollama_api_url">Ollama API URL:</label>
+            <input type="text" id="ollama_api_url" name="ollama_api_url" value="{{ settings.ollama_api_url }}" placeholder="e.g., http://localhost:11434/api/generate">
+            <p class="help-text">...</p>
+            <label for="analysis_prompt">Analysis Prompt:</label>
+            <textarea id="analysis_prompt" name="analysis_prompt" rows="15">{{ settings.analysis_prompt }}</textarea>
+            <p class="help-text">...</p>
+
+
+            <h2>Scan Configuration</h2>
+            {# ... Scan Interval, Log Lines, Ignored Containers ... (Same as before) #}
+            <label for="scan_interval_minutes">Scan Interval (minutes):</label>
+            <input type="number" id="scan_interval_minutes" name="scan_interval_minutes" value="{{ settings.scan_interval_minutes }}" min="1" step="1">
+            <p class="help-text">...</p>
+            <label for="log_lines_to_fetch">Log Lines to Fetch:</label>
+            <input type="number" id="log_lines_to_fetch" name="log_lines_to_fetch" value="{{ settings.log_lines_to_fetch }}" min="10" step="10">
+            <p class="help-text">...</p>
+            <label for="ignored_containers">Ignore Containers:</label>
+            <select id="ignored_containers" name="ignored_containers" multiple>
+                {% for name in all_container_names | sort %} <option value="{{ name }}" {% if name in ignored_container_list %}selected{% endif %}>{{ name }}</option> {% endfor %}
+            </select>
+            <p class="help-text">...</p>
+
+
+            <h2>Summary Configuration</h2>
+            {# ... Summary Interval ... (Same as before) #}
+            <label for="summary_interval_hours">AI Summary Interval (hours):</label>
+            <input type="number" id="summary_interval_hours" name="summary_interval_hours" value="{{ settings.summary_interval_hours }}" min="1" step="1">
+            <p class="help-text">...</p>
+
+
+            {# API Key Input - Part of the MAIN form #}
+            <h2>API</h2>
+            <label for="api_key">API Key:</label>
+            <div class="api-key-input-group">
+                 <input type="text" id="api_key" name="api_key" value="{{ settings.api_key }}" placeholder="Leave empty to disable API access">
+            </div>
+            <p class="help-text">Key required for API actions. Saved when 'Save All Settings' is clicked.</p>
+
+
+            <h2>Appearance</h2>
+            {# ... Colors ... (Same as before) #}
+            <label>Status Indicator Colors:</label>
+            <div class="color-setting">...</div>
+            <div class="color-setting">...</div>
+            <div class="color-setting">...</div>
+            <div class="color-setting">...</div>
+            <div class="color-setting">...</div>
+            <p class="help-text">Customize status indicator colors.</p>
+
+            {# Main Save Button #}
+            <button type="submit">Save All Settings</button>
+
+        </form> {# === MAIN Settings form ENDS HERE === #}
+
+
+        {# === SEPARATE Section and Form for API Key Regeneration (NOW OUTSIDE/AFTER MAIN FORM) === #}
+        <div class="api-key-regen-section"> {# Keep visual separation styling #}
+            <h2>Regenerate API Key</h2>
+            <form method="POST" action="{{ url_for('regenerate_api_key') }}" class="api-key-regen-form" id="regenerate-api-form">
+                <button type="button" class="button-secondary" onclick="document.getElementById('regenerate-api-form').submit();">Regenerate & Save New Key</button>
+            </form>
+            <p class="help-text">Clicking this button immediately generates a new random API key, saves it, and replaces the current one. The input field above will update after the page reloads.</p>
+        </div>
+        {# === END Separate Section === #}
+
+    </div> {# End container #}
+</body>
+</html>
