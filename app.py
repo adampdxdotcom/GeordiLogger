@@ -261,6 +261,16 @@ def container_history(container_id):
     with settings_lock: current_color_settings = {k: v for k, v in app_settings.items() if k.startswith('color_')}
     return render_template('history.html', records=history_records, container_name=container_name, container_id=container_id, timezone_obj=display_timezone_obj, color_settings=current_color_settings)
 
+# --- NEW Help Page Route ---
+@app.route('/help')
+def help_page():
+    """Displays the static help/manual page."""
+    logging.debug("Rendering help page.")
+    # You could potentially pass settings or other info here if needed later
+    return render_template('help.html')
+# --- END NEW Help Page Route ---
+
+
 # --- CORRECTED /settings route ---
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
