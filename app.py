@@ -643,7 +643,7 @@ if __name__ == '__main__':
              logging.warning("Database module does not have 'init_db' function. Skipping initialization.")
 
         load_settings() # Load settings from DB
-        fetch_initial_ollama_models
+        fetch_initial_ollama_models()
         populate_initial_statuses() # <-- Call added here
         setup_scheduler() # Setup and start background jobs
    # --- Attach shared state/objects directly to the app instance ---

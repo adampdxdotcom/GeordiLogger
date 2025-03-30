@@ -192,9 +192,39 @@
                 <input type="color" id="color_error" name="color_error" class="form-control" value="{{ settings.get('color_error', '#ffc107') }}">
             </div>
             <div class="color-setting">
-                <label for="color_pending">Pending/Awaiting Scan:</label>
+                <label for="color_pending">Pending:</label>
                 <input type="color" id="color_pending" name="color_pending" class="form-control" value="{{ settings.get('color_pending', '#6c757d') }}">
             </div>
+	                {# Input for Awaiting Scan #}
+            <div class="color-setting">
+                <label for="color_awaiting_scan">Awaiting Scan:</label> {# New label #}
+                <input type="color" id="color_awaiting_scan" name="color_awaiting_scan" class="form-control" value="{{ settings.get('color_awaiting_scan', '#6f42c1') }}"> {# New Input - Use the default purple #}
+            </div>
+
+            {# Optional: Add inputs for Ignored and Resolved if you want them configurable #}
+             <div class="color-setting">
+                <label for="color_ignored">Ignored:</label>
+                <input type="color" id="color_ignored" name="color_ignored" class="form-control" value="{{ settings.get('color_ignored', '#17a2b8') }}"> {# Use default #}
+            </div>
+             <div class="color-setting">
+                <label for="color_resolved">Resolved:</label>
+                <input type="color" id="color_resolved" name="color_resolved" class="form-control" value="{{ settings.get('color_resolved', '#007bff') }}"> {# Use default #}
+            </div>
+             {# Add inputs for the various error states if desired #}
+             <div class="color-setting">
+                <label for="color_error_fetching_logs">Error (Fetching Logs):</label>
+                <input type="color" id="color_error_fetching_logs" name="color_error_fetching_logs" class="form-control" value="{{ settings.get('color_error_fetching_logs', '#fd7e14') }}">
+            </div>
+             <div class="color-setting">
+                <label for="color_error_analysis">Error (Analysis):</label>
+                <input type="color" id="color_error_analysis" name="color_error_analysis" class="form-control" value="{{ settings.get('color_error_analysis', '#e83e8c') }}">
+            </div>
+             <div class="color-setting">
+                <label for="color_error_db_log">Error (DB Log):</label>
+                <input type="color" id="color_error_db_log" name="color_error_db_log" class="form-control" value="{{ settings.get('color_error_db_log', '#6f42c1') }}">
+            </div>
+             {# Add others as needed based on your DEFAULT_SETTINGS #}
+
             <p class="help-text">Customize status indicator colors used on the dashboard.</p>
 
 
