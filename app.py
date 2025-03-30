@@ -44,6 +44,27 @@ app_settings = {}; settings_lock = Lock() # Populated by load_settings
 stop_scan_event = threading.Event()
 scheduler = BackgroundScheduler(daemon=True)
 
+def fetch_initial_ollama_models():
+    """Fetches the list of models from Ollama at startup."""
+    logging.info("Fetching initial Ollama model list...")
+    try:
+        # Ensure analyzer URL is set from initial settings load if needed
+        # Might need to load settings *before* this if URL isn't default
+        # analyzer.OLLAMA_API_URL = app_settings.get('ollama_api_url') # If run after load_settings
+
+        fetched_models = analyzer.get_ollama_models() # Call the function
+        if fetched_models is not None: # Check if fetch was successful
+            with models_lock: # Use the global lock
+                global available_ollama_models # Declare modification of global
+                available_ollama_models[:] = fetched_models # Update the list content
+            logging.info(f"Successfully fetched {len(fetched_models)} models at startup.")
+        else:
+             logging.warning("Fetching initial models returned None. Check Ollama connection/logs.")
+
+    except Exception as e:
+        logging.exception("Error fetching initial Ollama models:")
+        # Keep available_ollama_models empty or with its current state
+
 # --- Settings Loader ---
 def load_settings():
     global app_settings
@@ -622,6 +643,7 @@ if __name__ == '__main__':
              logging.warning("Database module does not have 'init_db' function. Skipping initialization.")
 
         load_settings() # Load settings from DB
+        fetch_initial_ollama_models
         populate_initial_statuses() # <-- Call added here
         setup_scheduler() # Setup and start background jobs
    # --- Attach shared state/objects directly to the app instance ---

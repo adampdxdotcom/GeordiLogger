@@ -1,0 +1,265 @@
+1. Project Goal
+
+The primary goal of this application is to monitor the logs of running Docker containers, use a large language model (LLM) via the Ollama API to analyze these logs for potential abnormalities or critical errors, and provide a web interface for viewing the status of containers, managing detected issues, and configuring the monitoring process. It also offers a basic API for external integration.
+
+2. Core Functionality
+
+    Automatic Log Scanning: Uses APScheduler to periodically fetch recent log lines from all running (and not explicitly ignored) Docker containers.
+
+    AI-Powered Analysis: Sends fetched logs to a user-selected Ollama model with a configurable prompt designed to identify critical errors/warnings while ignoring routine informational messages.
+
+    Issue Persistence: Stores detected abnormalities (container info, log snippet, AI analysis, timestamps) in an SQLite database.
+
+    Status Tracking: Each detected issue has a status (unresolved, resolved, ignored) managed by the user via the web UI. Resolved/ignored issues are not flagged as unhealthy on subsequent scans unless a new distinct issue appears.
+
+    Web Dashboard (/): Displays a list of monitored containers with their current health status (Healthy, Unhealthy, Error, Pending, Awaiting Scan after resolution). Shows overall scan status, next scheduled scan time, and an AI-generated system health summary.
+
+    Issue Management (/manage/<id>): Allows users to view the details of a specific abnormality, add resolution notes, and change its status (resolve, ignore, re-open).
+
+    Container History (/history/<id>): Displays a list of all past abnormalities recorded for a specific container.
+
+    Settings Page (/settings): Allows users to configure:
+
+        Ollama Model & API URL
+
+        Log Analysis Prompt
+
+        Scan Interval, Log Lines Fetched, Summary Interval
+
+        Containers to Ignore
+
+        UI Status Colors
+
+        API Key (with regeneration)
+
+    API (/api/...): Provides JSON endpoints to get status, container list, issues, and trigger scans/summaries (protected by API key).
+
+    Self-Contained: Runs as a Docker container, interacting with the host's Docker socket.
+
+3. Project Structure (Key Files)
+
+    app.py: The main Flask application file. Handles routing, scheduling, global state, settings management, and orchestrates background tasks.
+
+    db.py: Manages all interactions with the SQLite database (monitoring_data.db), including schema initialization, storing/retrieving abnormalities, and storing/retrieving application settings.
+
+    analyzer.py: Contains functions for interacting with the Docker API (connecting, fetching logs) and the Ollama API (sending logs/data for analysis/summary, fetching models).
+
+    requirements.txt: Lists Python package dependencies (Flask, APScheduler, Docker, Requests, Pytz).
+
+    templates/: Directory containing HTML templates rendered by Flask:
+
+        index.html: Main dashboard.
+
+        manage.html: Page for managing a specific abnormality.
+
+        history.html: Page displaying history for one container.
+
+        settings.html: Page for application configuration.
+
+        help.html: (Placeholder link added, template/route not yet created).
+
+    static/: Directory for static files (like style.css).
+
+    monitoring_data.db: (Located in /app/data inside container, mapped via volume/bind mount) The SQLite database file.
+
+4. Detailed File Breakdown & Key Functions
+
+    app.py
+
+        Initialization: Sets up Flask app, logging, scheduler, loads initial settings via load_settings().
+
+        Globals & Locks: Manages shared state like container_statuses, app_settings, ai_health_summary using Python threading.Lock for thread safety between web requests and background tasks.
+
+        load_settings(): Reads all settings from the DB (via db.get_all_settings) into the app_settings global dict on startup. Also handles type conversions (str to int, JSON string to list). Updates analyzer.py config vars.
+
+        scan_docker_logs(): (Background Task)
+
+            Reads current settings (prompt, model, ignore list, lines).
+
+            Connects to Docker socket.
+
+            Lists running containers.
+
+            Skips ignored containers.
+
+            Fetches logs for each container via analyzer.fetch_container_logs.
+
+            Sends logs to analyzer.analyze_logs_with_ollama with the configured prompt/model.
+
+            Processes result: If abnormal, checks db.get_abnormality_status. If not resolved/ignored, calls db.add_or_update_abnormality and updates current_scan_results as 'unhealthy'. If resolved/ignored, updates status as 'healthy'.
+
+            Updates the global container_statuses dict (under lock) with results from the scan, removing stopped containers.
+
+            Updates global scan_status.
+
+        update_ai_health_summary(): (Background Task)
+
+            Reads current settings (summary interval, model).
+
+            Calls db.get_recent_abnormalities.
+
+            Calls analyzer.summarize_recent_abnormalities.
+
+            Updates global ai_health_summary dict (under lock).
+
+        setup_scheduler(): Configures APScheduler timezone, adds the recurring jobs for scan_docker_logs and update_ai_health_summary using intervals read from settings. Starts the scheduler.
+
+        UI Routes:
+
+            /: (index) Renders index.html, passing current statuses, summary, scan info, colors.
+
+            /manage/<id>: (manage_abnormality) Renders manage.html. Handles POST to update abnormality status via db.update_abnormality_status and updates in-memory status to 'awaiting_scan' if resolved/ignored.
+
+            /history/<id>: (container_history) Renders history.html, passing records from db.get_abnormalities_by_container.
+
+            /settings: (settings) Handles GET to display settings from app_settings cache and POST to validate/save settings via db.set_setting and update app_settings cache. Reloads necessary config in analyzer.
+
+            /settings/regenerate_api_key: (regenerate_api_key) Handles POST, generates new key via secrets, saves via db.set_setting, updates cache, redirects to /settings. (Note: Button currently submits wrong form - known issue).
+
+        Scheduler Control Routes: /pause_schedule, /resume_schedule, /stop_current_scan, /trigger_scan, /trigger_summary. Interact with the scheduler object or stop_scan_event.
+
+        API Routes (/api/...)
+
+            /api/status, /api/containers, /api/issues: Public GET endpoints returning JSON derived from global state or DB queries.
+
+            /api/scan/trigger, /api/summary/trigger: POST endpoints requiring API key authentication (via require_api_key decorator) to trigger background jobs.
+
+        require_api_key(): Decorator function checking Authorization: Bearer / X-Api-Key header against the api_key in app_settings. Uses secrets.compare_digest.
+
+        if __name__ == '__main__':: Reads PORT env var, runs the app using Waitress (if available) or Flask dev server.
+
+    db.py
+
+        init_db(): Creates abnormalities and settings tables if they don't exist. Populates settings with defaults from DEFAULT_SETTINGS dict if empty.
+
+        get_setting(), set_setting(), get_all_settings(): Manage key-value pairs in the settings table. Handles defaults. set_setting includes logging.
+
+        add_or_update_abnormality(): Inserts new issue or updates last_detected_timestamp/ollama_analysis if status is unresolved.
+
+        get_abnormality_status(): Checks DB status for a specific container/snippet combo.
+
+        get_latest_unresolved_abnormality_id(): Finds DB ID for linking.
+
+        get_abnormality_by_id(): Fetches single record for /manage.
+
+        update_abnormality_status(): Updates status/notes in DB.
+
+        get_recent_abnormalities(): Fetches records within N hours for summary.
+
+        get_abnormalities_by_container(): Fetches all records for /history.
+
+        get_abnormalities_by_status(): Fetches records by status for /api/issues.
+
+    analyzer.py
+
+        get_docker_client(): Connects via Docker socket.
+
+        fetch_container_logs(): Gets specified number of log lines.
+
+        analyze_logs_with_ollama(): Takes logs, model, custom_prompt. Formats prompt, calls Ollama /api/generate, interprets response ("NORMAL", "ERROR:", or abnormality text).
+
+        extract_log_snippet(): Parses Ollama response or uses keywords/last lines to find relevant snippet from logs.
+
+        summarize_recent_abnormalities(): Takes list of DB records, formats them for a prompt, calls Ollama /api/generate for a summary.
+
+        get_ollama_models(): Calls Ollama /api/tags to list available models.
+
+    HTML Templates: Use Jinja2 templating to display data passed from Flask routes. index.html and history.html include dynamic CSS <style> blocks to apply user-configured colors. settings.html contains the form for all configurations.
+
+5. Key Concepts & Mechanisms
+
+    State Management: Global dictionaries (container_statuses, app_settings, ai_health_summary) hold the current state. threading.Lock is used to prevent race conditions when these are accessed/modified by different threads (web requests vs. background tasks).
+
+    Scheduling: APScheduler runs scan_docker_logs and update_ai_health_summary in background threads based on intervals defined in settings.
+
+    Settings Persistence: Settings are stored in the SQLite settings table. They are loaded into the app_settings dictionary (cache) on startup. The /settings page reads from the cache, and saving updates both the cache and the database. Intervals require an app restart to affect the scheduler. Other settings (prompt, colors, API key, ignore list, model, URL) take effect more immediately.
+
+    API Authentication: Action endpoints (/api/.../trigger) are protected by the @require_api_key decorator, which checks for a valid key in headers/params against the configured setting. Read-only endpoints are public.
+
+6. Configuration
+
+    Environment Variables: Used for initial setup or things less likely to change via UI: TZ, PORT, FLASK_SECRET_KEY, LOG_LEVEL, USE_WAITRESS. Initial values for Ollama URL/Model, intervals, and log lines can also be set via Env Vars, but they primarily act as defaults if the settings table is empty.
+
+    Settings Page/Database: The primary way to configure the application after initial startup. Overrides defaults/env vars for most operational parameters.
+
+7. Deployment Notes
+
+    Runs as a Docker container.
+
+    Requires mounting the Docker socket (/var/run/docker.sock) usually as read-only.
+
+    Requires a persistent volume/bind mount for /app/data to store the SQLite database. User preferred bind mount like /opt/docker/geordi/data:/app/data.
+
+    Listens on a port defined by the PORT environment variable (default 5001), which must be mapped in docker-compose.yml or docker run.
+
+8. Known Issues / Next Steps Discussed
+
+    Regenerate API Key Button: Still submits the main settings form instead of its dedicated route, despite HTML structure and JS onclick changes. Needs further debugging (perhaps browser dev tools network tab analysis or trying a link-based confirmation).
+
+    Help Page: Link added to index.html, but route and template (/help, help.html) need creation.
+
+    Dockerfile: Next logical step for packaging.
+
+    Refactoring app.py: Discussed potentially breaking app.py into Flask Blueprints and service modules for better organization.
+
+Summary for Second Chat Session (Geordi App)
+
+Context: Started a new chat session to improve interaction speed due to the previous chat's large context size.
+
+Completed Changes & Fixes in This Session:
+
+    Initial UI Errors Fixed: Resolved BuildError exceptions on the main dashboard (/) caused by incorrect url_for endpoint names for the Settings and Help links in index.html.
+
+    Help Page Implemented: Added the /help route in app.py (initially discussed, then implemented) and created the basic templates/help.html.
+
+    Regenerate API Key Button Fixed: Corrected the HTML structure in settings.html by placing the Regenerate button inside its own separate <form> targeting the correct route (/settings/regenerate_api_key), ensuring it no longer interferes with the main settings form.
+
+    API Key Display & Copy: Modified settings.html to display the API key in a readonly text field and added a functional "Copy Key" button using JavaScript (including handling secure context requirements for the Clipboard API).
+
+    Prompt Copy/Clear Buttons: Added "Copy Prompt" and "Clear Prompt" buttons with JavaScript functionality below the Analysis Prompt textarea on the settings page.
+
+    Log Fetching Fix: Corrected a TypeError in scan_docker_logs by updating the analyzer.fetch_container_logs function definition to accept the num_lines argument.
+
+    Immediate Status Population: Implemented populate_initial_statuses() in app.py (called at startup) to connect to Docker, list running containers, check their last known status from the database, and display them immediately on the dashboard without waiting for the first scan.
+
+    Delayed First Scan: Modified setup_scheduler() in app.py to schedule the first run of scan_docker_logs after the full configured interval, rather than immediately after startup.
+
+    Blueprint Refactoring (UI Routes):
+
+        Created routes/ui_routes.py and defined a Flask Blueprint named ui.
+
+        Moved user-facing routes (/, /manage, /history, /settings, /help, /regenerate_api_key) from app.py into ui_routes.py and associated them with the ui_bp blueprint.
+
+        Refactored state access within ui_routes.py to use current_app attributes (e.g., current_app.app_settings, current_app.container_statuses_lock).
+
+        Registered the ui_bp blueprint in app.py.
+
+        Updated url_for calls in both Python redirects (ui_routes.py, app.py) and templates (*.html) to use the necessary ui. prefix (e.g., url_for('ui.index')).
+
+        Moved get_display_timezone into a separate utils.py file.
+
+    Settings Form Separation: Restructured settings.html and the settings() POST route in ui_routes.py to completely separate API key regeneration from the saving of other core settings, resolving conflicts between the forms.
+
+Ongoing Processes:
+
+    Blueprint Refactoring (app.py): We have successfully moved the UI routes. The next steps discussed are:
+
+        Moving API routes (/api/...) to an api_routes.py blueprint.
+
+        Moving Scheduler control routes (/pause_schedule, etc.) to their own blueprint or potentially the API blueprint.
+
+        Gradually introducing a Service Layer to move core logic out of route functions and background tasks (e.g., scan_service.py, settings_service.py).
+
+    Ollama Model List Population: We diagnosed that the model list dropdown in Settings wasn't populating correctly because the model fetch was tied to the delayed log scan.
+
+        Proposed Fix (Not Yet Implemented): Create fetch_initial_ollama_models() in app.py to run at startup (after load_settings) and populate the available_ollama_models list immediately. Ensure this list and its lock are attached to current_app and read correctly by the settings GET route.
+
+Discussed Future Enhancements/Ideas:
+
+    Refined Log Analysis Prompt: Addressed the issue of verbose LLM responses for normal activity. Proposed a stricter prompt focusing only on critical errors and demanding a concise "NORMAL" or "ERROR: <log line>" response format. (Current prompt needs updating via Settings).
+
+    Raw Log Viewing: Add icons/links to the dashboard allowing users to view recent raw logs for specific containers via a new route (/logs/<container_id>) and template.
+
+    Proactive Anomaly Prediction: A "crazy cool" idea to use the LLM on larger log histories to identify trends or precursors to failures, potentially suggesting root causes. (Marked as ambitious, requires significant work).
+
+We are now at a stage where the UI Blueprint refactoring is functional, but the model list needs the startup fetch implemented. We can proceed with that fix or move on to other refactoring/features.  

@@ -248,16 +248,53 @@ def settings():
                      # No api_key handling needed here
                      else: new_settings[key] = value # Model, Prompt
 
-            # --- Handle Validation Results ---
+# --- Handle Validation Results ---
             if validation_errors:
-                for error in validation_errors: flash(error, 'error')
+                for error in flash_errors: flash(error, 'error') # Assuming flash_errors exists
+
                 # Repopulate data for re-rendering (fetch everything including api_key for display)
-                with current_app.settings_lock: current_display_settings = current_app.app_settings.copy()
-                with current_app.container_statuses_lock: running_names = {d['name'] for d in current_app.container_statuses.values()}
-                ignored_list_display = current_display_settings.get('ignored_containers_list', [])
-                all_names_display = sorted(list(running_names.union(set(ignored_list_display))))
-                with current_app.models_lock: current_models = list(current_app.available_ollama_models)
-                return render_template('settings.html', settings=current_display_settings, available_models=current_models, all_container_names=all_names_display, ignored_container_list=ignored_list_display)
+                # Use a try block around operations that might fail (like accessing app attributes)
+                try:
+                    # Indent these lines one level further, inside the try block
+                    with current_app.settings_lock:
+                        current_display_settings = current_app.app_settings.copy()
+                    with current_app.container_statuses_lock:
+                        # Ensure the line below is complete and correct in your actual code
+                        running_names = {d['name'] for d in current_app.container_statuses.values()}
+                    ignored_list_display = current_display_settings.get('ignored_containers_list', [])
+                    all_names_display = sorted(list(running_names.union(set(ignored_list_display))))
+
+                    # Wrap the model fetching specifically, as this seems to be the target of the except blocks
+                    try:
+                        # Indent these lines relative to the inner try
+                        with current_app.models_lock:
+                             # Make sure the variable name matches where it's used below
+                             current_models_display = list(current_app.available_ollama_models)
+                        logging.info(f"Models passed to settings template: {current_models_display}") # Log fetched models
+
+                    # These except blocks now correspond to the inner try
+                    except AttributeError:
+                        logging.error("Failed to get models_lock or available_ollama_models from current_app")
+                        current_models_display = [] # Set default on error
+                    except Exception as e_models: # Use a different variable name for clarity
+                        logging.exception(f"Error getting models for settings page: {e_models}")
+                        current_models_display = [] # Set default on error
+
+                    # This return is now inside the outer try block but after the inner try/except
+                    # Ensure the line below is complete and correct in your actual code
+                    return render_template('settings.html',
+                                           settings=current_display_settings,
+                                           available_models=current_models_display,
+                                           # Add other necessary context variables
+                                           all_container_names=all_names_display,
+                                           ignored_container_list=ignored_list_display)
+
+                except Exception as e_outer:
+                    # Catch potential errors from accessing locks or other app attributes before model fetching
+                    logging.exception(f"Outer error preparing settings page data after validation failure: {e_outer}")
+                    flash("An error occurred while preparing the settings page.", "error")
+                    # Redirect or render an error page might be safer here
+                    return redirect(url_for('ui.index')) # Redirect to index on major error
 
             # --- Save Validated Settings ---
             else:

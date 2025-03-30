@@ -1,0 +1,139 @@
+1. Project Goal
+
+The primary goal of this application ("Geordi") is to monitor the logs of running Docker containers, use a large language model (LLM) via the Ollama API to analyze these logs for potential abnormalities or critical errors, and provide a web interface for viewing the status of containers, managing detected issues, and configuring the monitoring process. It also offers a basic API for external integration.
+
+2. Core Functionality
+
+- Automatic Log Scanning: Uses APScheduler to periodically fetch recent log lines from all running (and not explicitly ignored) Docker containers.
+- AI-Powered Analysis: Sends fetched logs to a user-selected Ollama model with a configurable prompt designed to identify critical errors/warnings while ignoring routine informational messages.
+- Issue Persistence: Stores detected abnormalities (container info, log snippet, AI analysis, timestamps) in an SQLite database.
+- Status Tracking: Each detected issue has a status (unresolved, resolved, ignored) managed by the user via the web UI. Resolved/ignored issues are not flagged as unhealthy on subsequent scans unless a new distinct issue appears.
+- Web Dashboard (/): Displays a list of monitored containers with their current health status (Healthy, Unhealthy, Error, Pending, Awaiting Scan after resolution). Shows overall scan status, next scheduled scan time, and an AI-generated system health summary.
+- Issue Management (/manage/<id>): Allows users to view the details of a specific abnormality, add resolution notes, and change its status (resolve, ignore, re-open).
+- Container History (/history/<id>): Displays a list of all past abnormalities recorded for a specific container.
+- Settings Page (/settings): Allows users to configure: Ollama Model & API URL, Log Analysis Prompt, Scan Interval, Log Lines Fetched, Summary Interval, Containers to Ignore, UI Status Colors, API Key (with regeneration).
+- API (/api/...): Provides JSON endpoints to get status, container list, issues, and trigger scans/summaries (protected by API key).
+- Self-Contained: Runs as a Docker container, interacting with the host's Docker socket.
+
+3. Project Structure
+
+/your_project_root/
+|
+|-- app.py                    # Main application script (reduced scope)
+|-- db.py                     # Database interaction layer (SQLite)
+|-- analyzer.py               # Docker & Ollama API interaction layer
+|-- utils.py                  # Utility functions (e.g., timezone handling)
+|
+|-- routes/                   # <<< Directory for Flask Blueprints
+|   |-- __init__.py           # Makes 'routes' a Python package
+|   |-- ui_routes.py          # <<< Blueprint for user-facing HTML routes
+|
+|-- static/                   # Directory for static web files
+|   |-- style.css             # Main stylesheet for HTML pages
+|
+|-- templates/                # Directory for HTML templates (Jinja2)
+|   |-- index.html            # Main dashboard page
+|   |-- manage.html           # Page to manage a specific issue
+|   |-- history.html          # Page to view container log issue history
+|   |-- settings.html         # Application settings/configuration page
+|   |-- help.html             # Help/documentation page
+|
+|-- data/                     # <<< Directory mapped via Docker volume for persistent data
+|   |-- monitoring_data.db    # The SQLite database file itself
+|
+|-- requirements.txt          # Lists Python package dependencies
+|-- Dockerfile                # Instructions to build the Docker image
+|-- docker-compose.yml        # Defines how to run the app service with Docker Compose
+|-- app.log                   # (Optional/Runtime) Log file if configured
+
+4. Detailed File Breakdown & Function Descriptions
+
+- app.py:
+    - Initializes the Flask application (app).
+    - Defines global state variables (container_statuses, app_settings, etc.) and their locks.
+    - Attaches shared state directly to the app object (e.g., app.app_settings = app_settings) so blueprints can access it via current_app.
+    - Contains the core background task logic (scan_docker_logs, update_ai_health_summary).
+    - Contains the populate_initial_statuses and fetch_initial_ollama_models functions run at startup.
+    - Sets up and starts the APScheduler.
+    - Still contains the route definitions for:
+        - Scheduler control (/pause_schedule, /resume_schedule, etc.)
+        - API endpoints (/api/...)
+    - Registers the blueprints (currently just ui_bp from ui_routes.py).
+    - Handles application startup (using Waitress or Flask dev server).
+    - Ongoing Process: Further refactoring aims to move API and scheduler routes into their own blueprints and background task logic into services.
+
+- db.py:
+    - Manages all interactions with the SQLite database (monitoring_data.db).
+    - Initializes the database schema (init_db).
+    - Provides functions to get/set settings (get_setting, set_setting, get_all_settings).
+    - Provides functions to add, update, and query abnormality records (e.g., add_or_update_abnormality, update_abnormality_status, get_abnormality_by_id, get_last_known_status).
+
+- analyzer.py:
+    - Handles communication with external services:
+        - Docker Engine (via docker library): Connects, lists containers, fetches logs (fetch_container_logs - updated to accept num_lines).
+        - Ollama API (via requests library): Fetches available models (get_ollama_models), sends logs for analysis (analyze_logs_with_ollama), sends data for summarization (summarize_recent_abnormalities).
+    - Includes helper logic like extract_log_snippet.
+
+- utils.py:
+    - Holds general utility functions shared across the application.
+    - Currently contains get_display_timezone.
+
+- routes/:
+    - Directory designated to hold Flask Blueprint modules.
+
+- routes/__init__.py:
+    - An empty file that marks the routes directory as a Python package, allowing imports like from routes.ui_routes import ui_bp.
+
+- routes/ui_routes.py:
+    - Defines the ui_bp Flask Blueprint.
+    - Contains the route handlers (@ui_bp.route(...)) for all user-facing HTML pages: /, /manage/<id>, /history/<id>, /settings, /help, /settings/regenerate_api_key.
+    - These routes now access shared application state (settings, statuses, locks, scheduler) via the current_app proxy object (e.g., current_app.app_settings, current_app.container_statuses_lock).
+    - Uses url_for('ui.endpoint_name') when redirecting within the blueprint or generating links in templates.
+
+- static/style.css:
+    - Contains CSS rules to style the HTML web interface.
+
+- templates/*.html:
+    - Jinja2 templates used by Flask's render_template function to generate the HTML pages served to the user.
+    - Updated to use url_for('ui.endpoint_name') for links pointing to routes now handled by the ui blueprint.
+
+- data/monitoring_data.db:
+    - The actual SQLite database file where all settings and abnormality records are stored persistently. Mapped via Docker volume.
+
+- requirements.txt:
+    - Lists necessary Python libraries (Flask, APScheduler, Docker, Requests, Pytz, Waitress). Used for pip install -r requirements.txt.
+
+- Dockerfile:
+    - Instructions for building the Geordi application into a Docker container image (copies code, installs dependencies, defines runtime commands).
+
+- docker-compose.yml:
+    - Defines the Geordi service for easy deployment with docker-compose. Manages image building, port mapping, volume mounts (for /app/data and /var/run/docker.sock), and environment variables.
+
+5. Key Concepts & Mechanisms
+
+- State Management: Global dictionaries attached to current_app (container_statuses, app_settings, ai_health_summary, available_ollama_models). threading.Lock prevents race conditions.
+- Scheduling: APScheduler runs background tasks (scan_docker_logs, update_ai_health_summary).
+- Settings Persistence: SQLite settings table, cached in app_settings dict on startup. /settings page interacts with cache and DB. Some settings changes take effect immediately, interval changes require restart.
+- API Authentication: Action endpoints (/api/.../trigger) use @require_api_key decorator. Read-only endpoints are public.
+- Blueprints: Used to organize routes. ui_routes.py handles user-facing pages. Future work involves creating blueprints for API and scheduler control routes.
+
+6. Configuration
+
+- Environment Variables: TZ, PORT, FLASK_SECRET_KEY, LOG_LEVEL, USE_WAITRESS. Can provide initial defaults for DB settings if table is empty.
+- Settings Page/Database: Primary configuration method post-startup. Overrides defaults/env vars.
+
+7. Deployment Notes
+
+- Runs as a Docker container, built using Dockerfile.
+- Typically run using docker-compose.yml.
+- Requires mounting Docker socket (/var/run/docker.sock, usually read-only).
+- Requires persistent volume/bind mount for /app/data (e.g., /opt/docker/geordi/data:/app/data).
+- Listens on port from PORT env var (default 5001), mapped via docker-compose.yml or docker run.
+
+8. Known Issues / Next Steps Discussed
+
+- Ollama Model List Population: Needs immediate fetch at startup (fetch_initial_ollama_models()), separate from delayed log scan. (Implementation pending).
+- Blueprint Refactoring: Continue moving API routes (/api/...) and Scheduler control routes (/pause_schedule, etc.) from app.py into their own blueprints. Consider a Service Layer for core logic.
+- Help Page: Route and template exist but content might be basic.
+- Refined Log Analysis Prompt: Update prompt in Settings for more concise "NORMAL" / "ERROR:" output from the LLM.
+- Discussed Future Enhancements: Raw log viewing feature, Proactive anomaly prediction (ambitious).
