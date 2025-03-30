@@ -333,6 +333,33 @@ def get_abnormalities_by_status(status='unresolved'):
     finally: conn.close()
     return results
 
+def get_last_known_status(container_id):
+    """
+    Checks the database for the most recent record of a container_id
+    and returns its status and abnormality ID if unresolved.
+    Returns ('no_history', None) if no record found.
+    """
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, status FROM abnormalities
+            WHERE container_id = ?
+            ORDER BY last_detected_timestamp DESC
+            LIMIT 1
+        """, (container_id,))
+        result = cursor.fetchone()
+        if result:
+            abnormality_id, status = result
+            if status == 'unresolved':
+                return status, abnormality_id # e.g., ('unresolved', 123)
+            else:
+                return status, None # e.g., ('resolved', None) or ('ignored', None)
+        else:
+            return 'no_history', None
+    except sqlite3.Error as e:
+        logging.error(f"Database error in get_last_known_status for {container_id[:12]}: {e}")
+        return 'db_error', None
 
 # Initialize the database when this module is first imported
 # This function is now more robust with logging

@@ -6,18 +6,20 @@
     <title>Settings - Docker Log Monitor</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
-        /* Basic styling */
+        /* Basic styling (Keep your existing styles) */
         body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
         *, *:before, *:after { box-sizing: border-box; }
         .container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; max-width: 900px; margin-left: auto; margin-right: auto; }
-        h1, h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 0; }
+        h1, h2, h3 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 1.5rem; margin-bottom: 1rem;}
+        h1 { margin-top: 0; }
         .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; font-size: 0.9em; }
         .back-link:hover { text-decoration: underline; }
 
-        /* Form Styling */
+        /* Form Styling (Keep your existing styles) */
         .settings-form label, .api-key-regen-section label { display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold; color: #555; }
         .settings-form input[type="text"],
-        .settings-form input[type="password"],
+        .settings-form input[type="password"], /* Keep password style just in case */
+        .settings-form input[type="url"], /* Added url type */
         .settings-form input[type="number"],
         .settings-form select,
         .settings-form textarea {
@@ -27,12 +29,23 @@
         .settings-form select[multiple] { min-height: 150px; }
         .settings-form input[type="color"] { padding: 0; height: 30px; width: 60px; border: 1px solid #ccc; border-radius: 4px; vertical-align: middle; margin-left: 10px;}
         .settings-form .color-setting { display: flex; align-items: center; gap: 10px; margin-bottom: 5px;}
-        .settings-form .help-text, .api-key-regen-section .help-text { font-size: 0.85em; color: #666; margin-top: 3px; }
+        .settings-form .help-text, .api-key-action-section .help-text { font-size: 0.85em; color: #666; margin-top: 3px; } /* Changed regen section class */
 
-        .api-key-input-group { margin-bottom: 5px;}
-        /* Section for Regen Button */
-        .api-key-regen-section { margin-top: 20px; padding-top: 20px; border-top: 1px dashed #ccc; }
+        /* API Key Specific Styling */
+        .api-key-display-group { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .api-key-display-group input[type="text"] { flex-grow: 1; /* Take available space */ }
+        .copy-button {
+            padding: 5px 10px; font-size: 0.85em; cursor: pointer;
+            background-color: #eee; border: 1px solid #ccc; border-radius: 4px;
+            white-space: nowrap;
+        }
+        .copy-button:hover { background-color: #ddd; }
+        .copy-button:active { background-color: #ccc; }
+
+        /* Regenerate Button Styling */
+        .api-key-action-section { margin-top: 10px; padding-top: 15px; border-top: 1px dashed #eee; } /* Changed regen section class */
         .api-key-regen-form button { padding: 8px 10px; font-size: 0.9em; white-space: nowrap; }
+
 
         .settings-form button[type="submit"] { /* Main save button */
             margin-top: 25px; padding: 10px 20px; background-color: #28a745; color: white;
@@ -42,7 +55,7 @@
         .button-secondary { background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; }
         .button-secondary:hover { background-color: #5a6268; }
 
-        /* Flash Messages */
+        /* Flash Messages (Keep your existing styles) */
         .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
         .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .flash.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
@@ -53,6 +66,8 @@
             .container { padding: 15px; }
             h1 { font-size: 1.5em; }
             .api-key-regen-form button { margin-top: 5px; width: 100%; }
+            .api-key-display-group { flex-direction: column; align-items: stretch; }
+            .copy-button { margin-top: 5px; text-align: center; }
         }
     </style>
 </head>
@@ -70,9 +85,7 @@
             {% endif %}
         {% endwith %}
 
-      
-<!-- === Main Settings Form === -->
-        {# Ensure this form tag wraps ALL the settings below, right down to the Save button #}
+        <!-- === Main Settings Form === -->
         <form id="settings-form" method="post" action="{{ url_for('settings') }}" class="settings-form">
             <h2 style="margin-bottom: 1.5rem;">Main Configuration</h2>
 
@@ -85,10 +98,10 @@
                         placeholder="e.g., http://192.168.1.100:11434">
                  <p class="help-text">Full URL to Ollama API (e.g., http://host:11434). Required.</p>
              </div>
-
             <div class="form-group">
                 <label for="ollama_model">Ollama Model for Analysis:</label>
                 <select id="ollama_model" name="ollama_model" class="form-control">
+                    {# ... (options code remains the same) ... #}
                     <option value="" {% if not settings.get('ollama_model') %}selected{% endif %}>-- Select an Available Model --</option>
                     {% if available_models %}
                         {% for model in available_models %}
@@ -111,37 +124,31 @@
                        oninput="document.getElementById('ollama_model').value = this.value;">
                 <p class="help-text">Select model used for analysis/summaries. Can enter manually if needed.</p>
             </div>
-
             <div class="form-group">
                 <label for="analysis_prompt">Log Analysis Prompt:</label>
-                {# Make sure this textarea has the correct name attribute #}
                 <textarea id="analysis_prompt" name="analysis_prompt" class="form-control" rows="6">{{ settings.get('analysis_prompt', '') }}</textarea>
                 <p class="help-text">Prompt for Ollama. Must include `{log_data}` placeholder. Instruct it to find critical issues or reply 'NORMAL'.</p>
             </div>
 
             <!-- --- Scanning Settings --- -->
-            <h3 style="margin-top: 2rem;">Scan Configuration</h3>
+            <h3>Scan Configuration</h3>
             <div class="form-group">
                 <label for="scan_interval_minutes">Scan Interval (Minutes):</label>
-                 {# Make sure this input has the correct name attribute #}
                 <input type="number" id="scan_interval_minutes" name="scan_interval_minutes" class="form-control"
                        value="{{ settings.get('scan_interval_minutes', 180) }}" min="1" required>
                 <p class="help-text">Frequency of log scans (minutes). Requires app restart.</p>
             </div>
-
             <div class="form-group">
                 <label for="log_lines_to_fetch">Log Lines to Fetch per Scan:</label>
-                 {# Make sure this input has the correct name attribute #}
                 <input type="number" id="log_lines_to_fetch" name="log_lines_to_fetch" class="form-control"
                        value="{{ settings.get('log_lines_to_fetch', 100) }}" min="10" max="10000" required>
                 <p class="help-text">Number of recent log lines analyzed per container (e.g., 100).</p>
             </div>
-
             <div class="form-group">
                 <label for="ignored_containers">Containers to Ignore:</label>
-                 {# Make sure this select has the correct name attribute #}
                 <select id="ignored_containers" name="ignored_containers" class="form-control" multiple style="min-height: 150px;">
-                    {% for name in all_container_names | sort %}
+                    {# ... (options code remains the same) ... #}
+                     {% for name in all_container_names | sort %}
                         <option value="{{ name }}" {% if name in ignored_container_list %}selected{% endif %}>{{ name }}</option>
                     {% endfor %}
                 </select>
@@ -149,55 +156,71 @@
             </div>
 
              <!-- --- Summary Settings --- -->
-            <h3 style="margin-top: 2rem;">Summary Configuration</h3>
+            <h3>Summary Configuration</h3>
              <div class="form-group">
                 <label for="summary_interval_hours">AI Summary Interval (Hours):</label>
-                 {# Make sure this input has the correct name attribute #}
                 <input type="number" id="summary_interval_hours" name="summary_interval_hours" class="form-control"
                        value="{{ settings.get('summary_interval_hours', 12) }}" min="1" required>
                 <p class="help-text">Frequency of AI health summary generation (hours). Requires app restart.</p>
             </div>
 
-            <!-- --- API Key (Manual Set/Clear) --- -->
-             <h3 style="margin-top: 2rem;">API</h3>
+            <!-- --- API Key Settings (Visible Key + Copy + Regenerate) --- -->
+            <h3>API Configuration</h3>
             <div class="form-group">
-                <label for="api_key">API Key (Set/Clear Manually):</label>
-                 {# Make sure this input has the correct name attribute #}
-                <input type="password" id="api_key" name="api_key" class="form-control"
-                       placeholder="Leave blank to keep current, enter text to clear/replace">
-                 <p class="help-text">Use 'Regenerate' button (above form) for secure keys. Only use this field to manually set/clear via 'Save All Settings'.</p>
+                <label for="api_key">API Key:</label>
+                <div class="api-key-display-group">
+                    {# Display current key in a text input #}
+                    <input type="text" id="api_key" name="api_key" class="form-control" readonly
+                           value="{{ settings.get('api_key', '') }}"
+                           placeholder="No key set. Regenerate one below.">
+                    {# Copy Button #}
+                    <button type="button" class="copy-button" id="copyApiKeyButton" onclick="copyApiKey()">Copy Key</button>
+                </div>
+                 <p class="help-text">Visible API Key. Use 'Copy Key' to copy. Use 'Regenerate' below to create a new one.</p>
+                 {# Removed manual set/clear instruction as input is now read-only #}
             </div>
 
+            {# Separate section/form for Regenerate, placed logically here but OUTSIDE main form structure #}
+            {# This DIV contains the SEPARATE FORM for the regenerate action #}
+            <div class="api-key-action-section">
+                 <label style="margin-bottom: 10px;">API Key Actions:</label>
+                 {# This form POSTs to the regenerate endpoint #}
+                 <form method="POST" action="{{ url_for('regenerate_api_key') }}" class="api-key-regen-form" style="display: inline-block;">
+                    <button type="submit" class="button button-secondary"
+                            onclick="return confirm('Are you sure you want to regenerate the API key?\nAny existing integrations using the old key will stop working immediately.');">
+                        Regenerate New Key
+                    </button>
+                 </form>
+                 <p class="help-text" style="display: inline-block; margin-left: 10px;">Instantly generates and saves a new random API key, replacing the current one.</p>
+             </div>
+            {# End of API Key Action section #}
+
+
             <!-- --- UI Colors --- -->
-            <h3 style="margin-top: 2rem;">Appearance</h3>
+            <h3>Appearance</h3>
             <label>Status Indicator Colors:</label>
-            {# Make sure these inputs have the correct name attributes #}
+             {# ... (color inputs remain the same) ... #}
             <div class="color-setting form-group">
                 <label for="color_healthy" style="display: inline-block; width: 180px;">Healthy:</label>
-                <input type="color" id="color_healthy" name="color_healthy"
-                       value="{{ settings.get('color_healthy', '#28a745') }}">
+                <input type="color" id="color_healthy" name="color_healthy" value="{{ settings.get('color_healthy', '#28a745') }}">
             </div>
             <div class="color-setting form-group">
                 <label for="color_unhealthy" style="display: inline-block; width: 180px;">Unhealthy:</label>
-                <input type="color" id="color_unhealthy" name="color_unhealthy"
-                       value="{{ settings.get('color_unhealthy', '#dc3545') }}">
+                <input type="color" id="color_unhealthy" name="color_unhealthy" value="{{ settings.get('color_unhealthy', '#dc3545') }}">
             </div>
             <div class="color-setting form-group">
                 <label for="color_error" style="display: inline-block; width: 180px;">Error/Failed Scan:</label>
-                <input type="color" id="color_error" name="color_error"
-                       value="{{ settings.get('color_error', '#ffc107') }}">
+                <input type="color" id="color_error" name="color_error" value="{{ settings.get('color_error', '#ffc107') }}">
             </div>
-             <div class="color-setting form-group">
+            <div class="color-setting form-group">
                 <label for="color_pending" style="display: inline-block; width: 180px;">Pending/Awaiting Scan:</label>
-                <input type="color" id="color_pending" name="color_pending"
-                       value="{{ settings.get('color_pending', '#6c757d') }}">
+                <input type="color" id="color_pending" name="color_pending" value="{{ settings.get('color_pending', '#6c757d') }}">
             </div>
             <p class="help-text">Customize status indicator colors used on the dashboard.</p>
 
-
             <!-- --- Submit Button for Main Form --- -->
-            {# Make sure this button is INSIDE the form tag #}
             <div class="form-group" style="margin-top: 2rem; border-top: 1px solid #eee; padding-top: 1.5rem;">
+                {# This button submits the MAIN form (everything except regenerate) #}
                 <button type="submit" class="button">Save All Settings</button>
                 <p class="help-text" style="display: inline-block; margin-left: 15px;">Saves all configuration options set above.</p>
             </div>
@@ -205,21 +228,51 @@
         </form>
         <!-- === End Main Settings Form === -->
 
-    
+    </div> <!-- End container -->
 
-      
-<div class="api-key-regen-section">
-        <h2>Regenerate API Key</h2>
-        <form method="POST" action="{{ url_for('regenerate_api_key') }}" class="api-key-regen-form" style="display: inline-block;">
-            <button type="submit" class="button button-secondary"  {# Use appropriate button class from your CSS #}
-                    onclick="return confirm('Are you sure you want to regenerate the API key?\nAny existing integrations using the old key will stop working immediately.');">
-                Regenerate & Save New Key
-            </button>
-        </form>
-        <p class="help-text" style="margin-top: 5px;">Instantly generates and saves a new random API key, replacing the current one.</p>
-    </div>
+    {# JavaScript for Copy Button #}
+    <script>
+        function copyApiKey() {
+            // Get the text field
+            var apiKeyInput = document.getElementById("api_key");
+            var copyButton = document.getElementById("copyApiKeyButton");
 
-    
-    </div> {# End container #}
+            if (!apiKeyInput || !apiKeyInput.value) {
+                console.warn("API Key input not found or is empty.");
+                copyButton.textContent = 'No Key!';
+                setTimeout(function() { copyButton.textContent = 'Copy Key'; }, 2000);
+                return;
+            }
+
+            // Select the text field
+            apiKeyInput.select();
+            apiKeyInput.setSelectionRange(0, 99999); // For mobile devices
+
+            try {
+                // Copy the text inside the text field using modern Clipboard API
+                navigator.clipboard.writeText(apiKeyInput.value).then(function() {
+                    // Success feedback
+                    console.log('API Key copied to clipboard');
+                    copyButton.textContent = 'Copied!';
+                    // Revert button text after a delay
+                    setTimeout(function() { copyButton.textContent = 'Copy Key'; }, 2000); // 2 seconds
+                }, function(err) {
+                    // Error feedback
+                    console.error('Failed to copy API Key: ', err);
+                    copyButton.textContent = 'Copy Failed';
+                     setTimeout(function() { copyButton.textContent = 'Copy Key'; }, 3000);
+                     // Fallback for older browsers (less reliable)
+                     try { document.execCommand('copy'); /* Might work */ } catch (e) {}
+                });
+            } catch (err) {
+                 console.error('Clipboard API not supported or error occurred: ', err);
+                 copyButton.textContent = 'Not Supported';
+                 setTimeout(function() { copyButton.textContent = 'Copy Key'; }, 3000);
+            }
+
+             // Deselect input field
+             window.getSelection().removeAllRanges();
+        }
+    </script>
 </body>
 </html>
