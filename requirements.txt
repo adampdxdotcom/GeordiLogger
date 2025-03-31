@@ -3,3 +3,4 @@ docker>=5.0
 requests>=2.25
 APScheduler>=3.7
 pytz>=2023.3
+waitress>=2.1

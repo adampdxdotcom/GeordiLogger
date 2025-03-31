@@ -1,0 +1,39 @@
+# .dockerignore
+
+# Git files
+.git
+.gitignore
+
+# Python cache/build files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environment
+.venv
+venv/
+env/
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local data / Logs / Secrets
+data/monitoring_data.db* # Exclude database file itself from image
+*.log
+.env* # Exclude environment files
+
+# Docker files
+Dockerfile
+docker-compose.yml

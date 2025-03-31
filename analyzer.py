@@ -12,398 +12,338 @@ try:
     import db # Used ONLY to access DEFAULT_SETTINGS for the prompt fallback
 except ImportError:
     logging.warning("Could not import db in analyzer.py; default prompt fallback may use a hardcoded value.")
-    # Define a hardcoded fallback here if db import fails, matching db.py's default
     # IMPORTANT: Keep this fallback prompt reasonably short and aligned with db.py's intent
     DEFAULT_ANALYSIS_PROMPT_FALLBACK = """Analyze the following Docker container logs STRICTLY for CRITICAL errors, security issues (like authentication failures), or persistent connection problems. Ignore standard startup/shutdown messages, INFO/DEBUG logs unless they clearly indicate a critical fault. If no significant issues are found, respond ONLY with the word 'NORMAL'. If issues ARE found, briefly describe the main problem and include the MOST relevant log line(s) EXACTLY as they appear, prefixed with 'Relevant Log(s):'. Example: 'Database connection refused. Relevant Log(s): ERROR: Connection refused: localhost:5432'
 
 Logs:
 {logs}"""
 
-# Basic logging setup
-logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-                    format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s')
+# Basic logging setup - Assuming configured elsewhere, but get logger here
+logger = logging.getLogger(__name__)
 
 # --- Configuration (Values are set/updated by app.py's load_settings) ---
 # These act as initial defaults if load_settings hasn't run yet, but app.py should override
-OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/generate")
+# Make sure these global names match exactly what app.py sets
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434") # Default to base URL
 DEFAULT_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "phi3")
 # Default LOG_LINES_TO_FETCH (will be overridden by app.py load_settings)
 LOG_LINES_TO_FETCH = int(os.environ.get("LOG_LINES_TO_FETCH", "100"))
 DOCKER_SOCKET_PATH = "/var/run/docker.sock"
-OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))
-OLLAMA_SUMMARY_TIMEOUT = int(os.environ.get("OLLAMA_SUMMARY_TIMEOUT", "120"))
+# Read timeouts from environment or set defaults
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "120")) # Timeout for analysis
+OLLAMA_SUMMARY_TIMEOUT = int(os.environ.get("OLLAMA_SUMMARY_TIMEOUT", "180")) # Longer timeout for summary
+OLLAMA_MODEL_LIST_TIMEOUT = 20 # Shorter timeout for just listing models
 
 
 def get_docker_client():
     """Initializes and returns a Docker client connected via the socket."""
     try:
-        # Ensure the socket path exists for a clearer error message if not found
         if not os.path.exists(DOCKER_SOCKET_PATH):
-            logging.error(f"Docker socket not found at {DOCKER_SOCKET_PATH}. Is Docker running and the socket mounted correctly?")
+            logger.error(f"Docker socket not found at {DOCKER_SOCKET_PATH}. Is Docker running and the socket mounted correctly?")
             return None
 
+        # Use unix scheme explicitly
         client = docker.DockerClient(base_url=f'unix://{DOCKER_SOCKET_PATH}')
-        # Use ping() to verify the connection
         if client.ping():
-            logging.info("Successfully connected to Docker daemon via socket.")
+            logger.info("Successfully connected to Docker daemon via socket.")
             return client
         else:
-            # This case might be rare if ping() throws exception on failure, but good to have
-            logging.error("Ping to Docker daemon failed, but no exception raised.")
+            logger.error("Ping to Docker daemon failed, but no exception raised.")
             return None
     except docker.errors.DockerException as e:
-        logging.error(f"DockerException connecting to Docker daemon: {e}")
-        # Provide more specific guidance based on common issues
+        logger.error(f"DockerException connecting to Docker daemon: {e}")
         if "Permission denied" in str(e):
-            logging.error("Permission denied accessing the Docker socket. Ensure the user running this application has permissions (e.g., is in the 'docker' group or uses appropriate privileges).")
+            logger.error("Permission denied accessing the Docker socket. Ensure the user running this application has permissions (e.g., is in the 'docker' group or uses appropriate privileges).")
         else:
-            logging.error("Check if Docker daemon is running and the socket path is correct.")
+            logger.error("Check if Docker daemon is running and the socket path is correct.")
         return None
     except requests.exceptions.ConnectionError as e:
-         # This often indicates the socket file exists but nothing is listening
-         logging.error(f"Connection error connecting to Docker socket {DOCKER_SOCKET_PATH}: {e}. Is Docker daemon running?")
+         logger.error(f"Connection error connecting to Docker socket {DOCKER_SOCKET_PATH}: {e}. Is Docker daemon running?")
          return None
     except Exception as e:
-        # Log the full traceback for unexpected errors
-        logging.exception(f"Unexpected error connecting to Docker daemon:")
+        logger.exception(f"Unexpected error connecting to Docker daemon:")
         return None
 
-# --- MODIFIED FUNCTION ---
-def fetch_container_logs(container, num_lines=100): # Added num_lines parameter with a default
+def fetch_container_logs(container, num_lines=100):
     """Fetches the specified number of recent log lines for a container."""
-    container_name = container.name
-    container_id_short = container.id[:12] # For logging brevity
-    # Use the passed-in num_lines argument directly
-    logging.debug(f"Fetching last {num_lines} lines for {container_name} ({container_id_short}) using argument.")
+    # Allow passing container object or ID string
+    container_name = "Unknown"
+    container_id_short = "Unknown"
     try:
-        # Pass the num_lines argument to the docker call
-        logs_bytes = container.logs(tail=num_lines, timestamps=False, stream=False)
+        if isinstance(container, str): # If ID was passed
+             client = get_docker_client()
+             if not client: return None # Cannot proceed without client
+             container_obj = client.containers.get(container)
+             container_id_short = container_obj.short_id
+             container_name = container_obj.name
+        else: # Assume container object was passed
+             container_obj = container
+             container_id_short = container_obj.short_id
+             container_name = container_obj.name
+
+        logger.debug(f"Fetching last {num_lines} lines for {container_name} ({container_id_short}).")
+        logs_bytes = container_obj.logs(tail=num_lines, timestamps=True, stream=False) # Add timestamps for context
         logs_str = logs_bytes.decode('utf-8', errors='replace')
-        # Check if logs are just whitespace or empty
+
         if not logs_str.strip():
-            logging.debug(f"Container {container_name} ({container_id_short}) returned empty logs.")
-            return "" # Return empty string is safer than None for subsequent processing
+            logger.debug(f"Container {container_name} ({container_id_short}) returned empty logs.")
+            return ""
         return logs_str
+
     except docker.errors.NotFound:
-        logging.warning(f"Container {container_name} ({container_id_short}) not found during log fetch (may have stopped).")
-        return None # Indicate failure clearly
+        logger.warning(f"Container ({container_id_short}/{container_name}) not found during log fetch (may have stopped).")
+        return None
     except docker.errors.APIError as e:
-        # Log specific Docker API errors
-        logging.error(f"Docker API error fetching logs for {container_name} ({container_id_short}): {e}")
-        return None # Indicate failure clearly
+        logger.error(f"Docker API error fetching logs for {container_name} ({container_id_short}): {e}")
+        return None
     except Exception as e:
-        # Log the full traceback for unexpected errors
-        logging.exception(f"Unexpected error fetching logs for {container_name} ({container_id_short}):")
-        return None # Indicate failure clearly
-# --- END MODIFIED FUNCTION ---
+        logger.exception(f"Unexpected error fetching logs for {container_name} ({container_id_short}):")
+        return None
 
-
-# --- MODIFIED FUNCTION SIGNATURE ---
+# --- Function modified to return specific error strings ---
 def analyze_logs_with_ollama(logs, model_to_use=None, custom_prompt=None):
     """
-    Sends logs to Ollama for analysis using the specified model and prompt.
-    Returns 'NORMAL', an error description string, or the Ollama analysis result.
+    Sends logs to Ollama for analysis.
+    Returns 'NORMAL', the AI's abnormality description (may start with 'ERROR:'),
+    or an 'ERROR: <process failure description>' string.
     """
+    global DEFAULT_OLLAMA_MODEL, OLLAMA_API_URL, OLLAMA_TIMEOUT # Access globals
+
     if not logs or logs.isspace():
-        logging.debug("No logs provided to analyze.")
+        logger.debug("No logs provided to analyze.")
         return "NORMAL"
 
-    # Use model passed, or the default set by load_settings
     effective_model = model_to_use or DEFAULT_OLLAMA_MODEL
-    if not effective_model: # Double check if default was empty
-         logging.error("Ollama model name is missing. Cannot analyze logs.")
-         return "ERROR: Ollama model not configured. Check settings."
+    if not effective_model:
+         logger.error("Ollama model name is missing. Cannot analyze logs.")
+         return "ERROR: Ollama model not configured. Check settings." # Return prefixed error
 
-    logging.info(f"Analyzing logs using Ollama model: {effective_model}")
+    logger.info(f"Analyzing logs using Ollama model: {effective_model}")
 
-    # --- Use custom_prompt if provided, otherwise use the default from db.py ---
-    prompt_to_use = custom_prompt # Start with custom if provided
-    if not prompt_to_use: # If no custom prompt, try DB default
+    # --- Get and format prompt ---
+    prompt_to_use = custom_prompt
+    if not prompt_to_use:
         try:
-            # Ensure DEFAULT_SETTINGS and the key exist
             if hasattr(db, 'DEFAULT_SETTINGS') and 'analysis_prompt' in db.DEFAULT_SETTINGS:
                 prompt_to_use = db.DEFAULT_SETTINGS['analysis_prompt']
-            else:
-                 raise AttributeError # Trigger fallback if structure is wrong
+            else: raise AttributeError
         except (NameError, AttributeError):
-             logging.warning("db module or DEFAULT_SETTINGS['analysis_prompt'] not available, using hardcoded prompt fallback.")
-             prompt_to_use = DEFAULT_ANALYSIS_PROMPT_FALLBACK # Use fallback defined above
+             logger.warning("db module or prompt setting not available, using hardcoded prompt fallback.")
+             prompt_to_use = DEFAULT_ANALYSIS_PROMPT_FALLBACK
 
-    # --- Fill prompt with logs ---
     try:
-        # Use .format() to insert the logs into the prompt template
-        # Ensure the prompt template actually contains '{logs}'
         if "{logs}" not in prompt_to_use:
-            logging.error("Analysis prompt configuration error: '{logs}' placeholder is missing!")
+            logger.error("Analysis prompt configuration error: '{logs}' placeholder is missing!")
             return "ERROR: Invalid analysis prompt configuration (missing '{logs}'). Check settings."
         final_prompt = prompt_to_use.format(logs=logs)
     except KeyError as ke:
-        # This error specifically means a placeholder other than 'logs' might be expected/missing
-        logging.error(f"Failed to format prompt - KeyError: {ke}. Check prompt template placeholders.")
+        logger.error(f"Failed to format prompt - KeyError: {ke}. Check prompt template placeholders.")
         return f"ERROR: Invalid analysis prompt configuration (KeyError: {ke})."
     except Exception as fmt_err:
-        logging.exception(f"Unexpected error formatting analysis prompt:")
+        logger.exception(f"Unexpected error formatting analysis prompt:")
         return f"ERROR: Prompt formatting failed - {fmt_err}"
 
-
-    payload = {
-        "model": effective_model,
-        "prompt": final_prompt, # Use the formatted prompt
-        "stream": False,
-        "options": {
-             "temperature": 0.15 # Keep low for consistency
-             # Consider adding other options like 'num_predict' if needed
-        }
-    }
-
-    # --- API URL is now set globally in analyzer by app.py load_settings ---
+    # --- Prepare API call ---
     generate_url = OLLAMA_API_URL
     if not generate_url:
-         logging.error("Ollama API URL is not configured!")
+         logger.error("Ollama API URL is not configured!")
          return "ERROR: Ollama API URL is not set. Check settings."
 
-    # Basic validation/correction for common URL mistakes
     if not generate_url.startswith(('http://', 'https://')):
-         logging.error(f"Invalid Ollama API URL format: {generate_url}. Must start with http:// or https://")
-         return f"ERROR: Invalid Ollama API URL format."
+         logger.error(f"Invalid Ollama API URL format: {generate_url}. Must start with http:// or https://")
+         return "ERROR: Invalid Ollama API URL format."
 
-    # Correct endpoint if needed (handle base URL or specific endpoint)
-    if '/api/' not in generate_url:
-        # Assume it's a base URL, append /api/generate
-        corrected_url = f"{generate_url.rstrip('/')}/api/generate"
-        logging.debug(f"Assuming base Ollama URL provided. Using endpoint: {corrected_url}")
-        generate_url = corrected_url
-    # Allow common endpoints like generate or chat, but log if unexpected
-    elif not generate_url.endswith(('/api/generate', '/api/chat')):
-        logging.warning(f"Ollama URL {generate_url} doesn't end with standard /api/generate or /api/chat. Using as is, but check configuration.")
-        # Attempt to fix common case: user provided only base URL ending in /api/
-        if generate_url.endswith('/api/'):
-             generate_url = generate_url + 'generate'
-             logging.info(f"Corrected Ollama URL ending in /api/ to: {generate_url}")
+    # Construct the correct /api/generate endpoint
+    if '/api/' in generate_url: base_url = generate_url.split('/api/', 1)[0]
+    else: base_url = generate_url.rstrip('/')
+    api_endpoint = f"{base_url}/api/generate"
 
+    payload = {
+        "model": effective_model, "prompt": final_prompt, "stream": False,
+        "options": { "temperature": 0.15 }
+    }
 
+    # --- Make API Call with Error Handling ---
     try:
-        logging.debug(f"Sending request to Ollama: {generate_url}, Model: {effective_model}, Timeout: {OLLAMA_TIMEOUT}s")
-        response = requests.post(generate_url, json=payload, timeout=OLLAMA_TIMEOUT)
+        logger.debug(f"Sending analysis request to Ollama: {api_endpoint}, Model: {effective_model}, Timeout: {OLLAMA_TIMEOUT}s")
+        response = requests.post(api_endpoint, json=payload, timeout=OLLAMA_TIMEOUT)
 
-        # Check status code carefully
         if response.status_code == 404:
-             logging.error(f"Ollama API endpoint not found ({response.status_code}): {generate_url}")
-             logging.error(f"Response: {response.text[:500]}")
-             # Check if it's likely a missing model
-             if f"model '{effective_model}' not found" in response.text:
-                 return f"ERROR: Ollama model '{effective_model}' not found on the server."
-             else:
-                 return f"ERROR: Ollama endpoint not found ({response.status_code}) at {generate_url}"
+            logger.error(f"Ollama API endpoint not found ({response.status_code}): {api_endpoint}")
+            response_text = response.text[:500]
+            logger.error(f"Response: {response_text}")
+            if f"model '{effective_model}' not found" in response.text:
+                return f"ERROR: Ollama model '{effective_model}' not found on the server."
+            else:
+                return f"ERROR: Ollama endpoint not found ({response.status_code}) at {api_endpoint}"
 
         response.raise_for_status() # Raise HTTPError for other bad responses (4xx or 5xx)
 
         result = response.json()
         analysis_text = result.get('response', '').strip()
 
-        logging.debug(f"Ollama Raw Response (model: {effective_model}): '{analysis_text}'")
-
-        # Strict check for "NORMAL" (allow optional trailing period, case-insensitive)
         if analysis_text.upper() == "NORMAL" or analysis_text.upper() == "NORMAL.":
-            logging.debug("Ollama analysis result: NORMAL")
             return "NORMAL"
         elif not analysis_text:
-            logging.warning(f"Ollama model {effective_model} returned an empty response.")
-            # Consider if this should be an error or treated as normal depending on strictness needed
-            return "ERROR: Ollama returned empty response"
-        # Any other non-empty response is treated as an abnormality description
+            logger.warning(f"Ollama model {effective_model} returned an empty response for analysis.")
+            return "ERROR: Ollama returned empty response" # Treat empty as an error condition
         else:
-            logging.info(f"Ollama analysis (model: {effective_model}) detected potential abnormality: {analysis_text[:150]}...")
+            # Return the AI's response (which might start with "ERROR:" as per prompt instructions)
             return analysis_text
 
     except requests.exceptions.Timeout:
-         logging.error(f"Timeout ({OLLAMA_TIMEOUT}s) contacting Ollama API at {generate_url}.")
-         return f"ERROR: Ollama request timed out after {OLLAMA_TIMEOUT}s"
+         logger.error(f"Timeout ({OLLAMA_TIMEOUT}s) contacting Ollama API at {api_endpoint}.")
+         return f"ERROR: Ollama request timed out ({OLLAMA_TIMEOUT}s)" # Prefixed error
+    except requests.exceptions.ConnectionError as e:
+         logger.error(f"Connection error contacting Ollama API at {api_endpoint}: {e}")
+         return f"ERROR: Could not connect to Ollama API at {OLLAMA_API_URL}. Connection refused/No route?" # Prefixed error
+    except requests.exceptions.HTTPError as e:
+        response_text = getattr(response, 'text', '(No response text available)')[:500]
+        logger.error(f"Ollama API request failed with status {response.status_code}: {response_text}")
+        return f"ERROR: Ollama API request failed (Status {response.status_code}). Check Ollama logs." # Prefixed error
     except requests.exceptions.RequestException as e:
-        # Provide more context in the error log and the returned error string
         error_detail = str(e)
-        if hasattr(e, 'response') and e.response is not None:
-             try: error_detail += f" - Status: {e.response.status_code}, Resp: {e.response.text[:200]}"
-             except Exception: pass # Ignore errors formatting the response detail
-        logging.error(f"Error communicating with Ollama API at {generate_url}: {error_detail}")
-        return f"ERROR: Ollama communication failed - {error_detail}"
+        logger.error(f"Error communicating with Ollama API at {api_endpoint}: {error_detail}")
+        return f"ERROR: Ollama communication failed - {error_detail}" # Prefixed error
     except json.JSONDecodeError as e:
-         # Log more of the response on JSON decode errors
-         response_text = getattr(response, 'text', '(No response text available)')
-         logging.error(f"Error decoding JSON response from Ollama API at {generate_url}: {e}")
-         logging.error(f"Received text (up to 500 chars): {response_text[:500]}")
-         return f"ERROR: Invalid JSON response from Ollama"
+         response_text = getattr(response, 'text', '(No response text available)')[:500]
+         logging.error(f"Error decoding JSON response from Ollama API at {api_endpoint}: {e}. Response: {response_text}")
+         return f"ERROR: Invalid JSON response from Ollama" # Prefixed error
     except Exception as e:
-        logging.exception(f"Unexpected error during Ollama analysis (model: {effective_model}):")
-        return f"ERROR: Unexpected analysis failure - {e}"
+        logger.exception(f"Unexpected error during Ollama analysis (model: {effective_model}):")
+        return f"ERROR: Unexpected analysis failure - {e}" # Prefixed error
 
 
 def extract_log_snippet(analysis_result, full_logs):
     """
     Extracts the relevant log snippet mentioned by Ollama or finds a relevant line as fallback.
     """
+    # Keep existing logic, seems reasonable
     prefix = "Relevant Log(s):"
-    snippet = "(No specific log line identified in analysis)" # Default/placeholder
+    snippet = "(No specific log line identified in analysis)"
 
-    # 1. Try extracting based on the prefix
     if prefix in analysis_result:
         try:
-            # Split only once, take the part after the prefix
             snippet_raw = analysis_result.split(prefix, 1)[1].strip()
-            # Limit length and add ellipsis if truncated
             snippet = snippet_raw[:500]
             if len(snippet_raw) > 500: snippet += "..."
             logging.debug(f"Extracted snippet based on prefix: '{snippet[:100]}...'")
         except Exception as e:
             logging.warning(f"Error splitting analysis result to get snippet after finding prefix: {e}")
-            snippet = "(Error extracting snippet from analysis)" # Mark as error, fallback will still try below
+            snippet = "(Error extracting snippet from analysis)"
 
-    # 2. Fallback if prefix wasn't found OR extraction failed
-    # Use the default/error message as the trigger for fallback
     if snippet.startswith("("):
-         logging.debug("Attempting snippet extraction fallback (prefix not found or extraction failed).")
-         # Keywords to search for in log lines (lowercase)
+         logging.debug("Attempting snippet extraction fallback.")
          keywords = ['error', 'warning', 'failed', 'exception', 'critical', 'traceback', 'fatal', 'refused', 'denied', 'unauthorized', 'timeout', 'unavailable']
          log_lines = full_logs.strip().split('\n')
          best_match_line = None
-
-         # Iterate backwards through logs to find the most recent relevant line
          for line in reversed(log_lines):
              line_strip = line.strip()
-             if not line_strip: continue # Skip empty lines
+             if not line_strip: continue
              line_lower = line_strip.lower()
-
-             # Basic level check (optional, might miss errors logged at INFO)
-             # is_info = "info" in line_lower[:20] # Rough check for INFO level
-
-             # Check if any keyword exists in the line
-             contains_critical_keyword = any(keyword in line_lower for keyword in keywords)
-
-             if contains_critical_keyword:
-                 # Prioritize the first keyword match found when searching backwards
+             if any(keyword in line_lower for keyword in keywords):
                  best_match_line = line_strip
-                 logging.debug(f"Found keyword match (fallback): '{best_match_line[:100]}...'")
-                 break # Stop searching once a keyword match is found
-
+                 break
          if best_match_line:
-             # Limit length and add ellipsis if truncated
              snippet = best_match_line[:500]
              if len(best_match_line) > 500: snippet += "..."
              logging.debug(f"Using best keyword match as snippet: '{snippet[:100]}...'")
          else:
-             # 3. Final fallback: Use last non-empty line(s) if no keywords found
-             logging.debug("No keyword match found, using last non-empty line(s) as final fallback snippet.")
+             logging.debug("No keyword match found, using last non-empty line(s).")
              non_empty_lines = [line.strip() for line in log_lines if line.strip()]
              if non_empty_lines:
-                  # Take up to the last 3 lines, join them
                   fallback_lines = "\n".join(non_empty_lines[-3:])
-                  snippet = fallback_lines[:500] # Limit total length
+                  snippet = fallback_lines[:500]
                   if len(fallback_lines) > 500: snippet += "..."
              else:
-                  # Should be rare if full_logs was not empty
                   snippet = "(No log lines available for snippet)"
 
     return snippet.strip()
 
-
+# --- Function modified to return empty list on failure ---
 def get_ollama_models():
-    """Queries the Ollama API's /api/tags endpoint to get a list of available models."""
-    models = []
-    # Use the current OLLAMA_API_URL which might have been updated from settings
-    current_api_url = OLLAMA_API_URL
-    if not current_api_url:
-         logging.warning("Cannot fetch models, Ollama API URL is not configured.")
-         return []
+    """Queries Ollama API for available models. Returns list of names or empty list on failure."""
+    global OLLAMA_API_URL, OLLAMA_MODEL_LIST_TIMEOUT # Access globals
 
-    # Construct the /api/tags URL from the base API URL
+    if not OLLAMA_API_URL:
+         logger.warning("Cannot fetch models, Ollama API URL is not configured.")
+         return [] # Return empty list
+
     tags_url = ""
     try:
-        # Handle cases where URL might end with /generate, /chat, /api/, or just the base
-        if '/api/' in current_api_url:
-             base_url = current_api_url.split('/api/', 1)[0]
-        else:
-             base_url = current_api_url.rstrip('/')
+        # Construct the /api/tags URL robustly
+        if '/api/' in OLLAMA_API_URL: base_url = OLLAMA_API_URL.split('/api/', 1)[0]
+        else: base_url = OLLAMA_API_URL.rstrip('/')
         tags_url = f"{base_url}/api/tags"
 
-        logging.info(f"Querying available Ollama models from {tags_url}")
-        response = requests.get(tags_url, timeout=20) # Reasonable timeout for listing tags
-        response.raise_for_status() # Check for HTTP errors
+        logger.info(f"Querying available Ollama models from {tags_url}")
+        response = requests.get(tags_url, timeout=OLLAMA_MODEL_LIST_TIMEOUT)
+        response.raise_for_status()
         data = response.json()
 
-        # Process the response structure (usually a list of model dicts)
         raw_models = data.get('models', [])
         if isinstance(raw_models, list):
-            # Extract the 'name' from each model dictionary
             model_names = [m.get('name') for m in raw_models if isinstance(m, dict) and m.get('name')]
-            # Ensure uniqueness and sort alphabetically
             models = sorted(list(set(model_names)))
-            logging.info(f"Successfully fetched available Ollama models: {models}")
+            logger.info(f"Successfully fetched available Ollama models: {models}")
+            return models # Return list of names on success
         else:
-             logging.warning(f"Ollama API response for models at {tags_url} was not a list as expected. Response: {data}")
+             logger.warning(f"Ollama API response for models at {tags_url} was not a list. Response: {data}")
+             return [] # Return empty list if format unexpected
 
-    except requests.exceptions.Timeout: logging.error(f"Timeout ({20}s) fetching models from Ollama at {tags_url}.")
-    except requests.exceptions.RequestException as e: logging.error(f"Could not fetch models from Ollama at {tags_url}: {e}")
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout ({OLLAMA_MODEL_LIST_TIMEOUT}s) fetching models from Ollama at {tags_url}.")
+    except requests.exceptions.ConnectionError as e:
+         logger.error(f"Connection error fetching models from Ollama at {tags_url}: {e}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Could not fetch models from Ollama at {tags_url}: {e}")
     except json.JSONDecodeError as e:
-        response_text = getattr(response, 'text', '(No response text available)')
-        logging.error(f"Error decoding JSON model list from Ollama at {tags_url}: {e}. Response: {response_text[:200]}")
-    except Exception as e: logging.exception(f"Unexpected error parsing model list from Ollama:") # Log full traceback
-    return models
+        response_text = getattr(response, 'text', '(No response text available)')[:200]
+        logger.error(f"Error decoding JSON model list from Ollama at {tags_url}: {e}. Response: {response_text}")
+    except Exception as e:
+        logger.exception(f"Unexpected error parsing model list from Ollama:")
+    return [] # Return empty list in all error cases
 
-
+# --- Function modified to return specific error strings ---
 def summarize_recent_abnormalities(abnormalities_list, model_to_use=None):
-    """Generates a brief system health summary from recent abnormality data using Ollama."""
+    """Generates health summary using Ollama. Returns summary string or 'Error: ...' string."""
+    global DEFAULT_OLLAMA_MODEL, OLLAMA_API_URL, OLLAMA_SUMMARY_TIMEOUT # Access globals
+
     if not abnormalities_list:
-        logging.info("No recent abnormalities provided for summary.")
+        logger.info("No recent abnormalities provided for summary.")
+        # Return non-error message, but not necessarily a full summary
         return "No recent abnormalities detected in the monitored period."
 
-    # Use model passed, or the default set by load_settings
     effective_model = model_to_use or DEFAULT_OLLAMA_MODEL
-    if not effective_model: # Double check if default was empty
-         logging.error("Ollama model name is missing. Cannot generate summary.")
-         return "Error: Ollama model not configured."
+    if not effective_model:
+         logger.error("Ollama model name is missing. Cannot generate summary.")
+         return "Error: Ollama model not configured." # Return prefixed error
 
-    # --- Check Ollama URL before proceeding ---
     generate_url = OLLAMA_API_URL
     if not generate_url:
-         logging.error("Cannot generate summary, Ollama API URL is not configured!")
-         return "Error: Ollama API URL is not set."
-    # Correct endpoint if needed (similar logic to analysis)
-    if '/api/' not in generate_url: generate_url = f"{generate_url.rstrip('/')}/api/generate"
-    elif not generate_url.endswith(('/api/generate','/api/chat')): # Allow chat too, might be used for summarization
-         logging.warning(f"Using potentially non-standard endpoint for summary: {generate_url}")
-         if generate_url.endswith('/api/'): generate_url += 'generate'
+         logger.error("Cannot generate summary, Ollama API URL is not configured!")
+         return "Error: Ollama API URL is not set." # Return prefixed error
 
+    # Construct endpoint
+    if '/api/' in generate_url: base_url = generate_url.split('/api/', 1)[0]
+    else: base_url = generate_url.rstrip('/')
+    api_endpoint = f"{base_url}/api/generate"
 
     logging.info(f"Generating health summary using Ollama model: {effective_model}")
 
+    # --- Format prompt ---
     formatted_list = ""
-    unresolved_count = 0
-    container_issues = {} # Track issues per container
-
     for item in abnormalities_list:
-        # Safely get values, provide defaults
         cont_name = item.get('container_name', 'N/A')
         status = item.get('status', 'N/A')
         analysis = item.get('ollama_analysis', 'N/A')
-        first_ts = item.get('first_detected_timestamp')
         last_ts = item.get('last_detected_timestamp')
-
-        # Format timestamps robustly
-        try: first_ts_str = first_ts.strftime('%Y-%m-%d %H:%M') if isinstance(first_ts, datetime) else str(first_ts)
-        except: first_ts_str = str(first_ts) # Fallback
         try: last_ts_str = last_ts.strftime('%Y-%m-%d %H:%M') if isinstance(last_ts, datetime) else str(last_ts)
-        except: last_ts_str = str(last_ts) # Fallback
-
-
+        except: last_ts_str = str(last_ts)
         formatted_list += (
             f"- Container: {cont_name}, Status: {status}, Last Seen: {last_ts_str}, "
             f"Desc: {analysis[:100]}{'...' if len(analysis)>100 else ''}\n"
         )
-        if status == 'unresolved':
-            unresolved_count += 1
-            container_issues[cont_name] = container_issues.get(cont_name, 0) + 1
-
-    # Enhanced prompt for better summary
     prompt = f"""You are an IT operations assistant analyzing system health based on recent container issues.
 Provide a concise (1-3 sentences) summary focusing on the overall health trend. Mention the total number of unresolved issues. If specific containers have multiple unresolved issues, highlight them briefly. Avoid listing every single issue.
 
@@ -412,55 +352,55 @@ Recent Container Issues (within monitored period):
 --- End List ---
 
 Overall System Health Summary:"""
+    # --- End Format prompt ---
 
     payload = {
-        "model": effective_model,
-        "prompt": prompt,
-        "stream": False,
-        "options": { "temperature": 0.4 } # Slightly higher temp for more natural summary
+        "model": effective_model, "prompt": prompt, "stream": False,
+        "options": { "temperature": 0.4 }
     }
 
-
+    # --- Make API Call with Error Handling ---
     try:
-        logging.debug(f"Sending request for health summary: {generate_url}, Model: {effective_model}, Timeout: {OLLAMA_SUMMARY_TIMEOUT}s")
-        response = requests.post(generate_url, json=payload, timeout=OLLAMA_SUMMARY_TIMEOUT)
+        logger.debug(f"Sending request for health summary: {api_endpoint}, Model: {effective_model}, Timeout: {OLLAMA_SUMMARY_TIMEOUT}s")
+        response = requests.post(api_endpoint, json=payload, timeout=OLLAMA_SUMMARY_TIMEOUT)
 
-        # Check status code carefully (similar to analysis)
         if response.status_code == 404:
-             logging.error(f"Ollama API endpoint not found ({response.status_code}) for summary: {generate_url}")
-             # Check if it's likely a missing model
-             if f"model '{effective_model}' not found" in response.text:
-                 return f"Error: Summary failed - Ollama model '{effective_model}' not found."
-             else:
-                 return f"Error: Summary failed - Ollama endpoint not found ({response.status_code})."
+            logger.error(f"Ollama API endpoint not found ({response.status_code}) for summary: {api_endpoint}")
+            if f"model '{effective_model}' not found" in response.text:
+                return f"Error: Summary failed - Ollama model '{effective_model}' not found." # Prefixed error
+            else:
+                return f"Error: Summary failed - Ollama endpoint not found ({response.status_code})." # Prefixed error
 
-        response.raise_for_status() # Raise HTTPError for other bad responses
+        response.raise_for_status()
 
         result = response.json()
         summary_text = result.get('response', '').strip()
 
         if not summary_text:
-            logging.warning(f"Ollama model {effective_model} returned an empty summary response.")
-            return "Error: AI returned an empty summary."
+            logger.warning(f"Ollama model {effective_model} returned an empty summary response.")
+            return "Error: AI returned an empty summary." # Return prefixed error
         else:
-             logging.info(f"Ollama health summary generated: {summary_text}")
-             return summary_text
+             logger.info(f"Ollama health summary generated.") # Don't log full summary here potentially
+             return summary_text # Return successful summary
 
     except requests.exceptions.Timeout:
-         logging.error(f"Timeout ({OLLAMA_SUMMARY_TIMEOUT}s) generating AI summary from {generate_url}.")
-         return f"Error: AI summary timed out ({OLLAMA_SUMMARY_TIMEOUT}s)."
+         logger.error(f"Timeout ({OLLAMA_SUMMARY_TIMEOUT}s) generating AI summary from {api_endpoint}.")
+         return f"Error: AI summary timed out ({OLLAMA_SUMMARY_TIMEOUT}s)." # Return prefixed error
+    except requests.exceptions.ConnectionError as e:
+         logger.error(f"Connection error generating AI summary from {api_endpoint}: {e}")
+         return f"Error: Could not connect to Ollama API at {OLLAMA_API_URL} for summary." # Return prefixed error
+    except requests.exceptions.HTTPError as e:
+        response_text = getattr(response, 'text', '(No response text available)')[:500]
+        logger.error(f"Ollama API request failed for summary with status {response.status_code}: {response_text}")
+        return f"Error: Summary failed - Ollama API request error (Status {response.status_code})." # Return prefixed error
     except requests.exceptions.RequestException as e:
         error_detail = str(e)
-        if hasattr(e, 'response') and e.response is not None:
-             try: error_detail += f" - Status: {e.response.status_code}, Resp: {e.response.text[:200]}"
-             except Exception: pass
-        logging.error(f"Error communicating with Ollama API for summary at {generate_url}: {error_detail}")
-        return f"Error: AI summary failed - communication error: {error_detail}"
+        logger.error(f"Error communicating with Ollama API for summary at {api_endpoint}: {error_detail}")
+        return f"Error: AI summary failed - communication error: {error_detail}" # Return prefixed error
     except json.JSONDecodeError as e:
-         response_text = getattr(response, 'text', '(No response text available)')
-         logging.error(f"Error decoding JSON summary response from Ollama at {generate_url}: {e}")
-         logging.error(f"Received text (up to 500 chars): {response_text[:500]}")
-         return f"Error: Invalid JSON summary response from AI."
+         response_text = getattr(response, 'text', '(No response text available)')[:500]
+         logging.error(f"Error decoding JSON summary response from Ollama at {api_endpoint}: {e}. Response: {response_text}")
+         return f"Error: Invalid JSON summary response from AI." # Return prefixed error
     except Exception as e:
-        logging.exception(f"Unexpected error during AI summary generation:")
-        return f"Error: Unexpected failure during AI summary: {e}."
+        logger.exception(f"Unexpected error during AI summary generation:")
+        return f"Error: Unexpected failure during AI summary: {e}." # Return prefixed error

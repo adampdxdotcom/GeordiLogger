@@ -6,7 +6,8 @@ import threading
 from threading import Lock
 import json
 # Removed secrets and functools as they were for the removed decorator
-from flask import Flask, render_template, redirect, url_for, flash # Removed jsonify, request, abort
+# <<< Import current_app >>>
+from flask import Flask, render_template, redirect, url_for, flash, current_app
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.base import JobLookupError
@@ -507,65 +508,101 @@ def scan_docker_logs():
                 scan_status["next_run_time"] = None
         except Exception as e: logging.error(f"Next run time update error: {e}"); scan_status["next_run_time"] = None
 
-
+# <<< START REPLACEMENT: update_ai_health_summary FUNCTION >>>
 def update_ai_health_summary():
-    global ai_health_summary
-    summary_start_time = datetime.now(timezone.utc) # Record start time regardless of settings
-    try:
-        # Similar note as scan_docker_logs about app context.
-        with settings_lock:
-            summary_hours = int(app_settings.get('summary_interval_hours', 12))
-            model_to_use = app_settings.get('ollama_model')
-            ollama_url = app_settings.get('ollama_api_url')
-            # Check if Ollama URL is configured
+    # global ai_health_summary # No longer needed if using current_app context consistently
+    summary_start_time = datetime.now(timezone.utc)
+    final_summary = "Summary generation failed." # Default error summary
+    final_error = "An unknown error occurred." # Default error message
+
+    # Need to ensure we have the app context when running in background thread
+    with app.app_context(): # Push context for current_app access
+        try:
+            # Safely get settings
+            settings_local = getattr(current_app, 'app_settings', {})
+            with current_app.settings_lock:
+                # Use .get with defaults for safety
+                summary_hours = settings_local.get('summary_interval_hours', 12)
+                model_to_use = settings_local.get('ollama_model')
+                ollama_url = settings_local.get('ollama_api_url')
+
+            # Convert summary_hours to int safely after retrieving
+            try: summary_hours = int(summary_hours)
+            except (ValueError, TypeError): summary_hours = 12 # Default if conversion fails
+
+
+            # Check prerequisite: Ollama URL
             if not ollama_url:
                 logging.warning("AI Health Summary skipped: Ollama API URL is not configured.")
-                with ai_summary_lock:
-                    ai_health_summary["summary"] = "Skipped - Ollama URL not set."
-                    ai_health_summary["error"] = "Configuration needed."
-                    ai_health_summary["last_updated"] = summary_start_time
-                return
-    except Exception as e:
-         logging.error(f"Summary settings error: {e}"); summary_hours = 12; model_to_use=db.DEFAULT_SETTINGS['ollama_model']
-         # Need to check URL again in case of error
-         with settings_lock: ollama_url = app_settings.get('ollama_api_url')
-         if not ollama_url:
-             logging.warning("AI Health Summary skipped due to settings error and missing Ollama URL.")
-             with ai_summary_lock:
-                 ai_health_summary["summary"] = "Skipped - Settings Error/Ollama URL missing."
-                 ai_health_summary["error"] = "Configuration needed."
-                 ai_health_summary["last_updated"] = summary_start_time
-             return
-
-
-    logging.info(f"Starting AI health summary generation (using last {summary_hours} hours).")
-    try:
-        # Ensure DB function exists
-        if hasattr(db, 'get_recent_abnormalities'):
-            recent_abnormalities = db.get_recent_abnormalities(hours=summary_hours)
-            summary_text = analyzer.summarize_recent_abnormalities(recent_abnormalities, model_to_use)
-            with ai_summary_lock:
-                ai_health_summary["last_updated"] = summary_start_time
-                if summary_text.startswith("Error:"):
-                     ai_health_summary["summary"], ai_health_summary["error"] = "Summary generation failed.", summary_text;
-                     logging.error(f"AI Summary generation failed: {summary_text}")
+                final_summary = "Skipped"
+                final_error = "Ollama API URL not configured in settings."
+            else:
+                # Check prerequisite: DB function
+                if not hasattr(db, 'get_recent_abnormalities'):
+                    logging.error("DB function 'get_recent_abnormalities' missing. Cannot generate summary.")
+                    final_summary = "Failed"
+                    final_error = "Internal error (Database function missing)."
                 else:
-                     ai_health_summary["summary"], ai_health_summary["error"] = summary_text, None;
-                     logging.info("AI Health Summary updated successfully.")
-        else:
-            logging.error("DB function 'get_recent_abnormalities' missing. Cannot generate summary.")
-            with ai_summary_lock:
-                 ai_health_summary["summary"] = "Failed - DB Function Missing"
-                 ai_health_summary["error"] = "Internal error (DB function)"
-                 ai_health_summary["last_updated"] = summary_start_time
+                    try:
+                        # --- Fetch data ---
+                        logging.debug(f"Fetching recent abnormalities (last {summary_hours} hours) for summary.")
+                        recent_abnormalities = db.get_recent_abnormalities(hours=summary_hours)
 
-    except Exception as e:
-        logging.exception("Unhandled error during AI health summary task:")
-        with ai_summary_lock:
-             ai_health_summary["summary"] = "Failed - Internal Error"
-             ai_health_summary["error"] = str(e)
-             ai_health_summary["last_updated"] = summary_start_time
+                        # --- Call analyzer (which now handles its own errors better) ---
+                        logging.info(f"Generating health summary using Ollama model {model_to_use}.")
+                        # analyzer_instance = getattr(current_app, 'analyzer', None) # Get analyzer ref if needed
+                        # if analyzer_instance:
+                        #    summary_or_error = analyzer_instance.summarize_recent_abnormalities(recent_abnormalities, model_to_use)
+                        # else:
+                        #    summary_or_error = "Error: Analyzer module not found."
 
+                        # Assuming analyzer is imported directly for now
+                        summary_or_error = analyzer.summarize_recent_abnormalities(recent_abnormalities, model_to_use)
+
+
+                        # --- Process result from analyzer ---
+                        if summary_or_error.startswith("Error:"):
+                             # Analyzer returned a specific error message
+                             logging.warning(f"AI Summary generation failed: {summary_or_error}")
+                             final_summary = "Failed"
+                             final_error = summary_or_error # Use the error message from analyzer
+                        else:
+                             # Success!
+                             logging.info("AI Health Summary updated successfully.")
+                             final_summary = summary_or_error
+                             final_error = None # No error
+
+                    except Exception as db_err:
+                         # Catch errors during DB fetch within this task
+                         logging.exception("Error fetching recent abnormalities for summary:")
+                         final_summary = "Failed"
+                         final_error = "Error retrieving data from database."
+
+        except AttributeError as e:
+             # Error accessing app attributes like locks or settings dict
+             logging.error(f"Error accessing app state in update_ai_health_summary: {e}")
+             final_summary = "Failed"
+             final_error = "Internal error accessing application state."
+        except Exception as e:
+            # Catch any other unexpected errors in this task
+            logging.exception("Unhandled error during AI health summary task:")
+            final_summary = "Failed"
+            final_error = f"An unexpected internal error occurred: {e}"
+        finally:
+            # --- Update global state (still needs lock) ---
+            try:
+                # Access the global dict directly via current_app reference
+                with current_app.ai_summary_lock:
+                     current_app.ai_health_summary["summary"] = final_summary
+                     current_app.ai_health_summary["error"] = final_error
+                     current_app.ai_health_summary["last_updated"] = summary_start_time
+            except AttributeError:
+                 # If current_app or its attributes don't exist when trying to update
+                 logging.error("Failed to update global ai_health_summary state (AttributeError).")
+            except Exception as update_err:
+                 logging.exception("Error updating AI summary state:")
+            # Context is automatically popped by 'with app.app_context()'
+# <<< END REPLACEMENT: update_ai_health_summary FUNCTION >>>
 
 # --- Scheduler Setup ---
 def setup_scheduler():
