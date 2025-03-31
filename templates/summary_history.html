@@ -12,53 +12,65 @@
          </a>
     </div>
 
+    {# --- Flash Messages --- #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    {# --- End Flash Messages --- #}
+
     {% if error_message %}
         <div class="alert alert-danger" role="alert">
             <strong>Error:</strong> {{ error_message }}
         </div>
     {% endif %}
 
-    {# Use the timezone name passed from the route #}
     <p class="text-muted">Displaying the last {{ limit }} summary generation attempts (Times in {{ display_timezone_name }}).</p>
 
     {% if records %}
         <div class="list-group shadow-sm">
             {% for record in records %}
                 {# Determine context class based on status #}
-                {# <<< Make sure db.py adds a 'status' field based on summary/error text >>> #}
-                {% set status = 'success' if record.summary_text else ('error' if record.error_text else 'skipped') %}
-                {% set list_class = 'list-group-item-success' if status == 'success' else ('list-group-item-danger' if status == 'error' else ('list-group-item-warning' if status == 'skipped' else '')) %}
-                {% set icon_class = 'fas fa-check-circle text-success' if status == 'success' else ('fas fa-times-circle text-danger' if status == 'error' else ('fas fa-forward text-warning' if status == 'skipped' else 'fas fa-question-circle')) %}
+                {% set list_class = 'list-group-item-success' if record.status == 'success' else ('list-group-item-danger' if record.status == 'error' else ('list-group-item-warning' if record.status == 'skipped' else '')) %}
+                {% set icon_class = 'fas fa-check-circle text-success' if record.status == 'success' else ('fas fa-times-circle text-danger' if record.status == 'error' else ('fas fa-forward text-warning' if record.status == 'skipped' else 'fas fa-question-circle')) %}
 
                 <div class="list-group-item list-group-item-action flex-column align-items-start {{ list_class }}">
                     <div class="d-flex w-100 justify-content-between mb-2">
                         <h5 class="mb-1">
-                            <i class="{{ icon_class }} me-2"></i>{{ status | title }}
+                            <i class="{{ icon_class }} me-2"></i>{{ record.status | title }}
                         </h5>
                         <small class="text-muted">
-                             {# --- FIX: Display the pre-formatted timestamp --- #}
                              {{ record.formatted_timestamp | default('N/A') }}
-                             {# --- END FIX --- #}
                         </small>
                     </div>
 
                     {# Display Summary or Error #}
-                    {% if status == 'success' and record.summary_text %}
-                        {# Use nl2br if summary text contains newlines #}
+                    {% if record.status == 'success' and record.summary_text %}
                         <p class="mb-1">{{ record.summary_text | nl2br }}</p>
-                    {% elif status != 'success' and record.error_text %}
+                    {% elif record.status != 'success' and record.error_text %}
                         <p class="mb-1 fst-italic text-secondary">{{ record.error_text }}</p>
                     {% else %}
                         <p class="mb-1 fst-italic text-secondary">(No details recorded)</p>
                     {% endif %}
 
-                     {# Add placeholder for future actions like 'Notes' or 'Delete' #}
-                     {#
-                     <div class="mt-2 text-end">
-                         <button class="btn btn-sm btn-outline-secondary disabled">Add Note</button>
-                         <button class="btn btn-sm btn-outline-danger disabled">Delete</button>
-                     </div>
-                     #}
+                    {# --- START: Add Delete Button Form --- #}
+                    <div class="mt-2 text-end">
+                        {# Uncomment notes button placeholder if needed later #}
+                        {# <button class="btn btn-sm btn-outline-secondary disabled me-1">Add Note</button> #}
+                        <form action="{{ url_for('ui.delete_summary_history_record', record_id=record.id) }}" method="POST" style="display: inline;"
+                              onsubmit="return confirm('Are you sure you want to delete this summary record permanently?');">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="fas fa-trash-alt me-1"></i>Delete
+                            </button>
+                        </form>
+                    </div>
+                    {# --- END: Add Delete Button Form --- #}
 
                 </div>
             {% endfor %}

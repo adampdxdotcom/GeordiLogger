@@ -574,6 +574,35 @@ def get_summary_history(limit=50):
 
 # --- END: New Summary History Functions ---
 
+# --- START: New Delete Summary History Function ---
+def delete_summary_history(record_id):
+    """Deletes a specific summary history record by its ID."""
+    conn = get_db()
+    cursor = conn.cursor()
+    success = False
+    try:
+        cursor.execute("DELETE FROM summary_history WHERE id = ?", (record_id,))
+        conn.commit()
+        # Check if any row was actually deleted
+        success = cursor.rowcount > 0
+        if success:
+            logging.info(f"Successfully deleted summary history record ID {record_id}.")
+        else:
+            logging.warning(f"Attempted to delete summary history ID {record_id}, but record not found.")
+        return success
+    except sqlite3.Error as e:
+        logging.error(f"DB Error deleting summary history record ID {record_id}: {e}")
+        conn.rollback()
+        return False
+    except Exception as e:
+        logging.exception(f"Unexpected error deleting summary history record ID {record_id}:")
+        conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+# --- END: New Delete Summary History Function ---
+
 
 # Initialize the database when this module is first imported
 # This function is now more robust with logging

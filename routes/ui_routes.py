@@ -737,4 +737,40 @@ def view_logs(container_id):
                            num_lines=num_lines,
                            error_message=error_message) # Pass error message explicitly
 
+
+# --- START: New Delete Summary History Route ---
+@ui_bp.route('/summary_history/delete/<int:record_id>', methods=['POST'])
+def delete_summary_history_record(record_id):
+    """Handles deletion of a specific summary history record."""
+    logger.info(f"Attempting to delete summary history record ID: {record_id}")
+    deleted = False
+    error_msg = None
+
+    try:
+        # Check if the DB function exists
+        if hasattr(db, 'delete_summary_history'):
+            deleted = db.delete_summary_history(record_id)
+            if not deleted:
+                # This might happen if the record was already deleted in another request
+                error_msg = f"Summary record ID {record_id} not found or already deleted."
+                logging.warning(error_msg)
+        else:
+            error_msg = "Internal Error: Delete summary history feature not available (DB function missing)."
+            logging.error(error_msg)
+
+    except Exception as e:
+        error_msg = f"An unexpected error occurred while deleting summary record ID {record_id}: {e}"
+        logging.exception(f"Error deleting summary record ID {record_id}:")
+
+    # Flash message based on outcome
+    if deleted:
+        flash(f"Summary record ID {record_id} deleted successfully.", 'success')
+    else:
+        # Use a warning category if not found, error if exception occurred
+        flash(error_msg or f"Failed to delete summary record ID {record_id}.", 'warning' if error_msg and "not found" in error_msg else 'danger')
+
+    # Redirect back to the history page
+    return redirect(url_for('ui.summary_history'))
+# --- END: New Delete Summary History Route ---
+
 # --- Keep any other routes below ---
