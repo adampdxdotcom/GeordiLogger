@@ -41,6 +41,10 @@
         .flash.error { color: #721c24; background-color: #f8d7da; border-color: #f5c6cb; }
         .flash.info { color: #0c5460; background-color: #d1ecf1; border-color: #bee5eb; }
         .flash.warning { color: #856404; background-color: #fff3cd; border-color: #ffeeba; }
+        /* Style for checkbox group */
+        .form-check { position: relative; display: block; padding-left: 1.25rem; }
+        .form-check-input { position: absolute; margin-top: 0.3rem; margin-left: -1.25rem; }
+        .form-check-label { margin-bottom: 0; font-weight: normal; } /* Remove bottom margin for label in checkbox */
         @media (max-width: 600px) { .container { padding: 15px; } h1 { font-size: 1.5em; } .api-key-display-group { flex-direction: column; align-items: stretch; gap: 5px;} .copy-button { margin-top: 5px; text-align: center; } .api-key-action-section .api-key-regen-form { display: block; margin-bottom: 5px; } .api-key-action-section .button-success { width: 100%; } }
     </style>
 
@@ -93,7 +97,6 @@
 
             <!-- --- Ollama Settings --- -->
             <h3>Ollama Configuration</h3>
-            <!-- ... (Ollama URL, Model Select, Prompt Textarea + Copy/Clear buttons) ... -->
             <!-- These inputs NEED name attributes -->
              <div class="form-group">
                  <label for="ollama_api_url">Ollama API Base URL:</label>
@@ -141,7 +144,6 @@
 
             <!-- --- Scanning Settings --- -->
             <h3>Scan Configuration</h3>
-            <!-- ... (Scan Interval, Log Lines, Ignore List) ... -->
             <div class="form-group">
                 <label for="scan_interval_minutes">Scan Interval (Minutes):</label>
                 <input type="number" id="scan_interval_minutes" name="scan_interval_minutes" class="form-control" value="{{ settings.get('scan_interval_minutes', 180) }}" min="1" required>
@@ -152,6 +154,22 @@
                 <input type="number" id="log_lines_to_fetch" name="log_lines_to_fetch" class="form-control" value="{{ settings.get('log_lines_to_fetch', 100) }}" min="10" max="10000" required>
                 <p class="help-text">Number of recent log lines analyzed per container (e.g., 100).</p>
             </div>
+
+            {# --- ADD: Scan on Startup Checkbox --- #}
+            <div class="form-group">
+                 <div class="form-check">
+                     {# Checkbox sends value 'true' only when checked #}
+                     {# The backend needs to handle the case where 'scan_on_startup' is NOT present in the form data #}
+                     <input class="form-check-input" type="checkbox" value="true" id="scan_on_startup" name="scan_on_startup"
+                            {% if settings.get('scan_on_startup_bool') %}checked{% endif %}>
+                     <label class="form-check-label" for="scan_on_startup">
+                         Run Scan Immediately on Startup
+                     </label>
+                 </div>
+                 <p class="help-text">If checked, performs a log scan shortly after the application starts, in addition to the regular schedule.</p>
+            </div>
+            {# --- END: Scan on Startup Checkbox --- #}
+
             {# --- Container Ignore List - Replaced Textarea with Multi-Select --- #}
             <div class="form-group">
                 <label for="ignored_containers_select">Containers to Ignore:</label>
@@ -174,7 +192,6 @@
 
              <!-- --- Summary Settings --- -->
             <h3>Summary Configuration</h3>
-            <!-- ... (Summary Interval) ... -->
              <div class="form-group">
                 <label for="summary_interval_hours">AI Summary Interval (Hours):</label>
                 <input type="number" id="summary_interval_hours" name="summary_interval_hours" class="form-control" value="{{ settings.get('summary_interval_hours', 12) }}" min="1" required>
@@ -184,7 +201,6 @@
 
             <!-- --- UI Colors --- -->
             <h3>Appearance</h3>
-            <!-- ... (Color pickers) ... -->
             <label>Status Indicator Colors:</label>
             <div class="color-setting">
                 <label for="color_healthy">Healthy:</label>
@@ -195,43 +211,45 @@
                 <input type="color" id="color_unhealthy" name="color_unhealthy" class="form-control" value="{{ settings.get('color_unhealthy', '#dc3545') }}">
             </div>
             <div class="color-setting">
-                <label for="color_error">Error/Failed Scan:</label>
-                <input type="color" id="color_error" name="color_error" class="form-control" value="{{ settings.get('color_error', '#ffc107') }}">
+                <label for="color_error">Error/Failed Scan:</label> {# Combined Generic Error #}
+                <input type="color" id="color_error" name="color_error" class="form-control" value="{{ settings.get('color_error', '#fd7e14') }}"> {# Using Orange #}
             </div>
             <div class="color-setting">
                 <label for="color_pending">Pending:</label>
-                <input type="color" id="color_pending" name="color_pending" class="form-control" value="{{ settings.get('color_pending', '#6c757d') }}">
+                <input type="color" id="color_pending" name="color_pending" class="form-control" value="{{ settings.get('color_pending', '#ffc107') }}"> {# Yellow #}
             </div>
-	                {# Input for Awaiting Scan #}
+            {# Input for Awaiting Scan #}
             <div class="color-setting">
                 <label for="color_awaiting_scan">Awaiting Scan:</label> {# New label #}
                 <input type="color" id="color_awaiting_scan" name="color_awaiting_scan" class="form-control" value="{{ settings.get('color_awaiting_scan', '#6f42c1') }}"> {# New Input - Use the default purple #}
             </div>
-
-            {# Optional: Add inputs for Ignored and Resolved if you want them configurable #}
+            {# Inputs for Ignored and Resolved #}
              <div class="color-setting">
                 <label for="color_ignored">Ignored:</label>
-                <input type="color" id="color_ignored" name="color_ignored" class="form-control" value="{{ settings.get('color_ignored', '#17a2b8') }}"> {# Use default #}
+                <input type="color" id="color_ignored" name="color_ignored" class="form-control" value="{{ settings.get('color_ignored', '#17a2b8') }}"> {# Teal #}
             </div>
              <div class="color-setting">
                 <label for="color_resolved">Resolved:</label>
-                <input type="color" id="color_resolved" name="color_resolved" class="form-control" value="{{ settings.get('color_resolved', '#007bff') }}"> {# Use default #}
+                <input type="color" id="color_resolved" name="color_resolved" class="form-control" value="{{ settings.get('color_resolved', '#007bff') }}"> {# Blue #}
             </div>
-             {# Add inputs for the various error states if desired #}
+             {# Inputs for the specific error states #}
              <div class="color-setting">
-                <label for="color_error_fetching_logs">Error (Fetching Logs):</label>
-                <input type="color" id="color_error_fetching_logs" name="color_error_fetching_logs" class="form-control" value="{{ settings.get('color_error_fetching_logs', '#fd7e14') }}">
+                <label for="color_error_fetching_logs">Error (Fetch Logs):</label>
+                <input type="color" id="color_error_fetching_logs" name="color_error_fetching_logs" class="form-control" value="{{ settings.get('color_error_fetching_logs', '#e67e22') }}"> {# Darker Orange #}
             </div>
              <div class="color-setting">
                 <label for="color_error_analysis">Error (Analysis):</label>
-                <input type="color" id="color_error_analysis" name="color_error_analysis" class="form-control" value="{{ settings.get('color_error_analysis', '#e83e8c') }}">
+                <input type="color" id="color_error_analysis" name="color_error_analysis" class="form-control" value="{{ settings.get('color_error_analysis', '#e74c3c') }}"> {# Red/Pink #}
             </div>
              <div class="color-setting">
                 <label for="color_error_db_log">Error (DB Log):</label>
-                <input type="color" id="color_error_db_log" name="color_error_db_log" class="form-control" value="{{ settings.get('color_error_db_log', '#6f42c1') }}">
+                <input type="color" id="color_error_db_log" name="color_error_db_log" class="form-control" value="{{ settings.get('color_error_db_log', '#8e44ad') }}"> {# Dark Purple #}
+            </div>
+             <div class="color-setting">
+                <label for="color_error_db_lookup">Error (DB Lookup):</label>
+                <input type="color" id="color_error_db_lookup" name="color_error_db_lookup" class="form-control" value="{{ settings.get('color_error_db_lookup', '#95a5a6') }}"> {# Greyish #}
             </div>
              {# Add others as needed based on your DEFAULT_SETTINGS #}
-
             <p class="help-text">Customize status indicator colors used on the dashboard.</p>
 
 

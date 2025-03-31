@@ -224,13 +224,28 @@ def load_settings():
             if 'ollama_model' not in app_settings:
                 app_settings['ollama_model'] = db.DEFAULT_SETTINGS['ollama_model']
 
+            # --- ADD: Parse scan_on_startup setting ---
+            try:
+                # Get string value, default 'false', convert to bool
+                scan_startup_str = app_settings.get('scan_on_startup', 'false')
+                app_settings['scan_on_startup_bool'] = scan_startup_str.lower() == 'true'
+                # Ensure the string version is also present if it came from defaults only
+                if 'scan_on_startup' not in app_settings:
+                    app_settings['scan_on_startup'] = scan_startup_str
+            except Exception as e:
+                 logger.error(f"Error processing scan_on_startup setting: {e}. Defaulting to False.")
+                 app_settings['scan_on_startup'] = 'false'
+                 app_settings['scan_on_startup_bool'] = False
+            # --- END ADD ---
+
             # Propagate key settings to the analyzer module's global scope after loading
             analyzer.OLLAMA_API_URL = app_settings['ollama_api_url']
             analyzer.DEFAULT_OLLAMA_MODEL = app_settings['ollama_model']
             # Note: LOG_LINES_TO_FETCH is passed per function call in analyzer now, not set globally there.
 
             logger.info("Settings loaded and processed successfully.")
-            logger.debug(f"Loaded settings cache: { {k: (v if k != 'analysis_prompt' else v[:30]+'...') for k,v in app_settings.items()} }") # Avoid logging long prompt
+            # Update debug log to show the boolean value
+            logger.debug(f"Loaded settings cache (scan_on_startup={app_settings.get('scan_on_startup_bool')}): { {k: (v if k != 'analysis_prompt' else v[:30]+'...') for k,v in app_settings.items()} }")
 
     except Exception as e:
         logger.exception("CRITICAL: Failed to load settings from database! Application might not function correctly.")
@@ -247,6 +262,9 @@ def load_settings():
                  app_settings['ignored_containers_textarea'] = ""
                  analyzer.OLLAMA_API_URL = app_settings['ollama_api_url']
                  analyzer.DEFAULT_OLLAMA_MODEL = app_settings['ollama_model']
+                 # Add default for scan_on_startup_bool in fallback too
+                 app_settings['scan_on_startup'] = 'false'
+                 app_settings['scan_on_startup_bool'] = False
              except Exception as fallback_e:
                   logger.error(f"Error processing fallback default settings: {fallback_e}")
 
@@ -988,7 +1006,7 @@ if __name__ == '__main__':
 
         # Add Scan Job
         # Delay first run slightly to ensure app is fully up
-        first_scan_delay_seconds = 15
+        first_scan_delay_seconds = 15 # Use a slightly longer default delay
         first_scan_time = now_local + timedelta(seconds=first_scan_delay_seconds)
         scheduler.add_job(
             scan_docker_logs,
@@ -1000,7 +1018,7 @@ if __name__ == '__main__':
             max_instances=1, # Prevent multiple scans running concurrently if one overruns
             misfire_grace_time=60 # Allow 1 minute grace period if scheduler is busy
         )
-        logger.info(f"Scheduled Docker log scan to run every {scan_interval_minutes} minutes, starting around {first_scan_time.strftime('%Y-%m-%d %H:%M:%S %Z')}.")
+        logger.info(f"Scheduled Docker log scan to run every {scan_interval_minutes} minutes.") # Removed start time from log
 
         # Add Summary Job
         # Delay first summary slightly more
@@ -1016,18 +1034,43 @@ if __name__ == '__main__':
             max_instances=1,
             misfire_grace_time=300 # Allow 5 minutes grace period
         )
-        logger.info(f"Scheduled AI health summary update to run every {summary_interval_hours} hours, starting around {first_summary_time.strftime('%Y-%m-%d %H:%M:%S %Z')}.")
+        logger.info(f"Scheduled AI health summary update to run every {summary_interval_hours} hours.") # Removed start time from log
 
         # Start the scheduler
         scheduler.start()
         logger.info("APScheduler started.")
 
-        # Initial status update for scan job
+        # --- START: Conditional Initial Scan ---
+        # Check the boolean setting loaded earlier
+        # Safely get the boolean value, default to False if key or boolean version is missing
+        scan_on_startup_enabled = app_settings.get('scan_on_startup_bool', False)
+        if scan_on_startup_enabled:
+            try:
+                run_initial_scan_delay = 10 # seconds (can be shorter than the first *recurring* scan delay)
+                initial_scan_run_time = datetime.now(get_display_timezone()) + timedelta(seconds=run_initial_scan_delay)
+                scheduler.add_job(
+                    scan_docker_logs,
+                    trigger='date', # Run once
+                    run_date=initial_scan_run_time,
+                    id='initial_scan_job',
+                    name='Initial Docker Log Scan',
+                    replace_existing=True,
+                    max_instances=1, # Ensure it doesn't clash with recurring if delay is very short
+                    misfire_grace_time=None # Don't reschedule if missed
+                )
+                logger.info(f"Scan on startup ENABLED. Scheduled initial log scan in {run_initial_scan_delay} seconds at {initial_scan_run_time.strftime('%Y-%m-%d %H:%M:%S %Z')}.")
+            except Exception as initial_scan_err:
+                 logger.error(f"Failed to schedule initial scan job: {initial_scan_err}")
+        else:
+            logger.info("Scan on startup DISABLED by setting.")
+        # --- END: Conditional Initial Scan ---
+
+        # Update initial scan_status message logic remains
         with scan_status_lock:
             job = scheduler.get_job('docker_log_scan_job')
             if job and job.next_run_time:
                  scan_status['next_run_time'] = job.next_run_time
-                 scan_status['last_run_status'] = "Scheduler started, initial scan pending."
+                 scan_status['last_run_status'] = "Scheduler started, first scan pending."
             else:
                  scan_status['last_run_status'] = "Scheduler started, but scan job not found?!"
 

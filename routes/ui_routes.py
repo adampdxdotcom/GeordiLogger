@@ -308,90 +308,73 @@ def settings():
 
     try:
         if request.method == 'POST':
-            logging.info("Processing CORE settings form update...") # Note: Excludes API Key
-            form_data = request.form.to_dict() # Get basic form data first
-            # Then specifically handle getlist for the multi-select
-            ignored_list_from_form = request.form.getlist('ignored_containers')
-            logging.debug(f"Ignored containers received from form (getlist): {ignored_list_from_form}")
-
+            logging.info("Processing CORE settings form update...")
+            form_data = request.form.to_dict() # Gets regular form fields
             new_settings = {}
             validation_errors = []
-            # Define expected keys *excluding* api_key using default settings as base
+            # Define expected keys *including* the new one, *excluding* api_key
             expected_keys = [k for k in db.DEFAULT_SETTINGS.keys() if k != 'api_key']
+            # Add scan_on_startup if it's not in defaults (it should be now)
+            if 'scan_on_startup' not in expected_keys: expected_keys.append('scan_on_startup')
 
             # --- Validation Loop ---
             for key in expected_keys:
-                # Use form_data for most, but ignored_list_from_form for 'ignored_containers'
-                if key == 'ignored_containers':
-                    # <<< START CHANGE >>>
-                    # Directly use the list of selected values from the <select multiple>
-                    ignored_list = ignored_list_from_form # Already fetched using getlist above
-                    # Basic validation (optional, could ensure no empty strings if needed)
-                    ignored_list = [name for name in ignored_list if name] # Ensure no empty values slip through
+                # --- START: Handle scan_on_startup checkbox ---
+                if key == 'scan_on_startup':
+                    # Checkbox value is 'true' if checked, otherwise key is absent in form_data
+                    value = 'true' if key in form_data else 'false'
+                    new_settings[key] = value # Store 'true' or 'false' string
+                # --- END: Handle scan_on_startup checkbox ---
+                # Handle ignored containers list (multi-select)
+                elif key == 'ignored_containers':
+                    ignored_list = request.form.getlist('ignored_containers') # Use getlist here
+                    ignored_list = [name for name in ignored_list if name] # Clean empty strings
                     try:
-                        # Save the list as a JSON string in the database
                         new_settings[key] = json.dumps(ignored_list)
-                        # Also update the helper 'textarea' value in case we need to re-render on error
-                        # (though ideally we won't need this specific key much anymore)
-                        # Update form_data dict directly for error re-rendering consistency
-                        form_data['ignored_containers_textarea'] = "\n".join(ignored_list)
+                        form_data['ignored_containers_textarea'] = "\n".join(ignored_list) # Keep for potential error re-render consistency
                     except Exception as e:
                         validation_errors.append(f"Error processing ignore list: {e}")
-                    # <<< END CHANGE >>>
+                # Handle other keys
                 else:
-                    # Process other keys as before using form_data.get()
-                    value = form_data.get(key, '').strip() # Use get() with default from the original dict
+                    value = form_data.get(key, '').strip() # Use get() with default
 
                     if key in ['scan_interval_minutes', 'summary_interval_hours', 'log_lines_to_fetch']:
                          try:
                              int_val = int(value)
                              if int_val <= 0: raise ValueError("Value must be positive.")
-                             new_settings[key] = str(int_val) # Store as string in dict, DB handles type
+                             new_settings[key] = str(int_val) # Store as string
                              # Check if restart needed
-                             app_settings_local = getattr(current_app, 'app_settings', {})
-                             with current_app.settings_lock:
-                                 if key in restart_required_settings and str(app_settings_local.get(key)) != str(int_val):
-                                      needs_restart_msg = True
+                             try:
+                                 app_settings_local = getattr(current_app, 'app_settings', {})
+                                 with current_app.settings_lock:
+                                     # Compare new string value with cached INT value (needs cast)
+                                     if key in restart_required_settings and str(app_settings_local.get(key)) != str(int_val):
+                                          needs_restart_msg = True
+                             except (AttributeError, ValueError, KeyError) as check_err:
+                                  logging.error(f"Could not check restart status for {key}: {check_err}")
                          except ValueError:
                              validation_errors.append(f"Invalid positive integer required for '{key.replace('_', ' ').title()}'.")
-                         except AttributeError: # Handle case where current_app or settings_lock is missing
-                              logging.error(f"Could not check restart status for {key} due to missing app state.")
-                    elif key.startswith('color_'):
-                         if not value:
-                              validation_errors.append(f"Color value for '{key.replace('_', ' ').title()}' cannot be empty.")
-                         elif not value.startswith('#') or not (len(value) == 7 or len(value) == 4):
-                             validation_errors.append(f"Invalid color format for '{key.replace('_', ' ').title()}'. Use #rrggbb or #rgb.")
-                         else:
-                              try:
-                                  int(value[1:], 16) # Validate hex
-                                  new_settings[key] = value
-                              except ValueError:
-                                  validation_errors.append(f"Invalid hex color value for '{key.replace('_', ' ').title()}'.")
-                    elif key == 'ollama_api_url':
-                         if not value:
-                             validation_errors.append("Ollama API URL cannot be empty.")
-                         elif not value.startswith(('http://', 'https://')):
-                             validation_errors.append("Ollama API URL must start with http:// or https://")
-                         else:
-                             new_settings[key] = value.rstrip('/') # Remove trailing slash
-                    elif key == 'ollama_model':
-                         # Use the manually entered field if provided, otherwise the dropdown
-                         manual_model = form_data.get('ollama_model_manual', '').strip()
-                         selected_model = value # Original value from select/hidden field
-                         final_model = manual_model if manual_model else selected_model
 
-                         if not final_model:
-                             validation_errors.append("Ollama Model cannot be empty (select or enter manually).")
+                    elif key.startswith('color_'):
+                         if not value: validation_errors.append(f"Color value for '{key.replace('_', ' ').title()}' cannot be empty.")
+                         elif not value.startswith('#') or not (len(value) == 7 or len(value) == 4): validation_errors.append(f"Invalid color format for '{key.replace('_', ' ').title()}'. Use #rrggbb or #rgb.")
                          else:
-                             new_settings[key] = final_model
-                             # Update form_data for potential re-render
-                             form_data['ollama_model'] = final_model
+                             try: int(value[1:], 16); new_settings[key] = value # Validate hex
+                             except ValueError: validation_errors.append(f"Invalid hex color value for '{key.replace('_', ' ').title()}'.")
+                    elif key == 'ollama_api_url':
+                         if not value: validation_errors.append("Ollama API URL cannot be empty.")
+                         elif not value.startswith(('http://', 'https://')): validation_errors.append("Ollama API URL must start with http:// or https://")
+                         else: new_settings[key] = value.rstrip('/') # Remove trailing slash
+                    elif key == 'ollama_model':
+                         manual_model = form_data.get('ollama_model_manual', '').strip()
+                         selected_model = value # Original value from select/hidden field in form_data
+                         final_model = manual_model if manual_model else selected_model
+                         if not final_model: validation_errors.append("Ollama Model cannot be empty (select or enter manually).")
+                         else: new_settings[key] = final_model; form_data['ollama_model'] = final_model # Update form_data too
                     elif key == 'analysis_prompt':
-                         if not value:
-                              validation_errors.append("Analysis Prompt cannot be empty.")
-                         else:
-                              new_settings[key] = value
-                    # No explicit handling for api_key here, it's done in regenerate route
+                         if not value: validation_errors.append("Analysis Prompt cannot be empty.")
+                         else: new_settings[key] = value
+                    # No explicit handling for api_key here
 
             # --- Handle Validation Results ---
             if validation_errors:
@@ -408,69 +391,57 @@ def settings():
 
                     # Get current saved settings as base
                     if settings_lock_local:
-                         with settings_lock_local:
-                              current_display_settings = app_settings_local.copy()
-                    else:
-                        logging.error("Settings lock missing on current_app, cannot safely copy settings.")
-                        current_display_settings = {} # Or provide defaults
+                         with settings_lock_local: current_display_settings = app_settings_local.copy()
+                    else: logging.error("Settings lock missing..."); current_display_settings = {}
 
                     # Get current running container names
                     if container_lock_local:
-                        with container_lock_local:
-                            running_names = {d['name'] for d in container_statuses_local.values() if isinstance(d, dict) and 'name' in d}
-                    else:
-                        logging.error("Container statuses lock missing on current_app.")
-                        running_names = set()
+                        with container_lock_local: running_names = {d['name'] for d in container_statuses_local.values() if isinstance(d, dict) and 'name' in d}
+                    else: logging.error("Container statuses lock missing..."); running_names = set()
 
-                    # Get currently saved ignore list
+                    # Get currently saved ignore list from display settings (safer)
                     ignored_list_display = current_display_settings.get('ignored_containers_list', [])
-                    if not isinstance(ignored_list_display, list): ignored_list_display = [] # Ensure it's a list
+                    if not isinstance(ignored_list_display, list): ignored_list_display = []
 
                     # Combine running and ignored for the multi-select options
                     all_names_display = sorted(list(running_names.union(set(ignored_list_display))))
 
                     # Get available models
                     if models_lock_local:
-                         with models_lock_local:
-                              current_models_display = list(models_local) # Make copy under lock
-                    else:
-                         logging.error("Models lock missing on current_app.")
-                         current_models_display = []
+                         with models_lock_local: current_models_display = list(models_local)
+                    else: logging.error("Models lock missing..."); current_models_display = []
 
                     logging.info(f"Validation Error: Re-rendering settings with models: {current_models_display}")
 
-                    # --- CRITICAL: Override display settings with submitted form data for re-render ---
-                    # Use form_data which now includes the processed 'ignored_containers_textarea'
+                    # --- Override display settings with submitted form data ---
+                    # Use form_data for most fields
                     for key, value in form_data.items():
-                         if key in current_display_settings or key == 'ignored_containers_textarea' or key == 'ollama_model_manual': # Include relevant form-only fields
-                              current_display_settings[key] = value # Overwrite saved value with submitted value
+                         if key in current_display_settings or key == 'ignored_containers_textarea' or key == 'ollama_model_manual':
+                              current_display_settings[key] = value
 
-                    # Ensure color defaults are present if missing from saved settings/form
-                    default_colors = db.DEFAULT_SETTINGS # Get full defaults
+                    # Explicitly handle scan_on_startup boolean for re-render based on form presence
+                    current_display_settings['scan_on_startup'] = 'true' if 'scan_on_startup' in form_data else 'false'
+                    current_display_settings['scan_on_startup_bool'] = (current_display_settings['scan_on_startup'] == 'true')
+
+                    # Ensure color defaults
+                    default_colors = db.DEFAULT_SETTINGS
                     for setting_key in default_colors:
-                         if setting_key.startswith('color_'):
-                              current_display_settings.setdefault(setting_key, default_colors[setting_key])
+                         if setting_key.startswith('color_'): current_display_settings.setdefault(setting_key, default_colors[setting_key])
 
-                    # *** Prepare the ignored list specifically for the multi-select ***
-                    # The list passed to the template should be the one submitted in the form
-                    # (which we parsed at the start of the POST handler)
+                    # Get the submitted ignored list for the multi-select state
                     submitted_ignored_list = request.form.getlist('ignored_containers')
-                    submitted_ignored_list = [name for name in submitted_ignored_list if name] # Clean again
+                    submitted_ignored_list = [name for name in submitted_ignored_list if name]
 
                     return render_template('settings.html',
                                            settings=current_display_settings, # Pass merged form/saved data
                                            available_models=current_models_display,
-                                           all_container_names=all_names_display, # List for options
-                                           ignored_container_list=submitted_ignored_list) # <<< Pass submitted list for selection state
+                                           all_container_names=all_names_display,
+                                           ignored_container_list=submitted_ignored_list) # Pass submitted list for selection
 
-                except AttributeError as e_attr:
-                    logging.exception(f"AttributeError preparing settings page data after validation failure: {e_attr}")
-                    flash("An application state error occurred while preparing the settings page.", "error")
-                    return redirect(url_for('ui.index'))
-                except Exception as e_outer:
-                    logging.exception(f"Outer error preparing settings page data after validation failure: {e_outer}")
-                    flash("An unexpected error occurred while preparing the settings page.", "error")
-                    return redirect(url_for('ui.index'))
+                except Exception as e_re_render:
+                     logging.exception(f"Error preparing settings page data after validation failure: {e_re_render}")
+                     flash("An unexpected error occurred while preparing the settings page.", "error")
+                     return redirect(url_for('ui.index'))
 
 
             # --- Save Validated Settings (No validation errors) ---
@@ -479,57 +450,65 @@ def settings():
                  failed_key = None
                  app_settings_ref = getattr(current_app, 'app_settings', None)
                  settings_lock_local = getattr(current_app, 'settings_lock', None)
-                 analyzer_instance = getattr(current_app, 'analyzer', None) # Get analyzer instance
+                 analyzer_instance = getattr(current_app, 'analyzer', None)
 
                  if app_settings_ref is None or settings_lock_local is None:
-                      logging.error("Cannot save settings: app_settings or settings_lock not found on current_app.")
+                      logging.error("Cannot save settings: app_settings or settings_lock not found.")
                       flash("Internal application error: Cannot access settings state.", "error")
                       save_success = False
                  else:
                      with settings_lock_local:
-                         for key, value in new_settings.items(): # Loop through validated (non-api_key) data
+                         for key, value in new_settings.items(): # Loop through validated data
                              current_value_in_cache = app_settings_ref.get(key)
-                             # Special compare for JSON list
+                             changed = False # Default to not changed
+
+                             # Compare based on type
                              if key == 'ignored_containers':
                                  try:
                                      current_list = json.loads(current_value_in_cache) if isinstance(current_value_in_cache, str) else (current_value_in_cache if isinstance(current_value_in_cache, list) else [])
                                      new_list = json.loads(value)
-                                     # Compare sets for order independence
                                      changed = set(current_list) != set(new_list)
-                                 except (json.JSONDecodeError, TypeError):
-                                     changed = True # Assume changed if parsing fails
+                                 except (json.JSONDecodeError, TypeError): changed = True
+                             # Compare string values directly for others (including 'true'/'false' for scan_on_startup)
                              else:
                                  changed = str(current_value_in_cache) != str(value)
 
                              if changed:
                                   logging.info(f"Attempting to save core setting: {key} = {value[:50] if isinstance(value, str) else value}...")
                                   if db.set_setting(key, value):
-                                       app_settings_ref[key] = value # Update cache
-                                       # Update derived/parsed values in cache
+                                       app_settings_ref[key] = value # Update cache (stores string)
+
+                                       # --- ADD: Update boolean cache value for scan_on_startup ---
+                                       if key == 'scan_on_startup':
+                                            app_settings_ref['scan_on_startup_bool'] = (value == 'true')
+                                            logging.debug(f"Updated scan_on_startup_bool in cache to: {app_settings_ref['scan_on_startup_bool']}")
+                                       # --- END ADD ---
+
+                                       # Update other derived/parsed values in cache
                                        if key == 'ignored_containers':
                                            try:
                                                parsed_list = json.loads(value)
                                                app_settings_ref['ignored_containers_list'] = parsed_list
-                                               # Update textarea representation in cache too for GET consistency
                                                app_settings_ref['ignored_containers_textarea'] = "\n".join(parsed_list)
                                            except Exception as parse_err:
                                                logging.error(f"Error parsing saved ignored_containers JSON: {parse_err}")
                                                app_settings_ref['ignored_containers_list'] = []
                                                app_settings_ref['ignored_containers_textarea'] = ""
                                        if key in ['scan_interval_minutes','summary_interval_hours','log_lines_to_fetch']:
-                                           try: app_settings_ref[key] = int(value)
-                                           except: app_settings_ref[key] = db.DEFAULT_SETTINGS.get(key) # Use default if cast fails
+                                           try:
+                                               app_settings_ref[key] = int(value) # Store as int in cache
+                                           except (ValueError, TypeError):
+                                               logging.warning(f"Failed to cast {key} to int for cache, storing as string.")
+                                               # Keep string value in cache if int cast fails post-DB save
+
                                        # Propagate relevant settings to analyzer
                                        if analyzer_instance:
                                             try:
                                                  if key == 'ollama_api_url': analyzer_instance.OLLAMA_API_URL = value
                                                  if key == 'ollama_model': analyzer_instance.DEFAULT_OLLAMA_MODEL = value
-                                                 # <<< REMOVED LINE: if key == 'log_lines_to_fetch': analyzer_instance.LOG_LINES_TO_FETCH = int(value) >>>
                                                  logging.debug(f"Propagated setting '{key}' to analyzer module.")
-                                            except Exception as prop_err:
-                                                 logging.error(f"Error propagating setting '{key}' to analyzer: {prop_err}")
-                                       else:
-                                            logging.warning("Analyzer instance not found on current_app, cannot propagate settings.")
+                                            except Exception as prop_err: logging.error(f"Error propagating setting '{key}' to analyzer: {prop_err}")
+                                       else: logging.warning("Analyzer instance not found, cannot propagate settings.")
                                   else: # db save failed
                                       logging.error(f"Database save failed for setting: {key}")
                                       save_success = False; failed_key = key; break # Stop saving on first failure
@@ -547,9 +526,7 @@ def settings():
 
         # --- GET Request ---
         else:
-            # <<< START OF ADDED LOGGING FOR GET >>>
-            logging.info("SETTINGS GET: Fetching data for settings page...") # <<< ADD 1
-            # Fetch all settings, including api_key for display
+            logging.info("SETTINGS GET: Fetching data for settings page...")
             current_settings_display = {}
             running_names = set()
             current_models_display = []
@@ -558,65 +535,58 @@ def settings():
             settings_lock_local = getattr(current_app, 'settings_lock', None)
             container_lock_local = getattr(current_app, 'container_statuses_lock', None)
             models_lock_local = getattr(current_app, 'models_lock', None)
-            app_settings_local = getattr(current_app, 'app_settings', {})
+            app_settings_local = getattr(current_app, 'app_settings', {}) # Get from app context
             container_statuses_local = getattr(current_app, 'container_statuses', {})
             models_local = getattr(current_app, 'available_ollama_models', [])
 
             if settings_lock_local:
                 with settings_lock_local:
                     current_settings_display = app_settings_local.copy()
-                logging.debug("SETTINGS GET: Settings fetched.") # <<< ADD 2
+                    # --- Ensure boolean version exists for template ---
+                    if 'scan_on_startup_bool' not in current_settings_display:
+                         current_settings_display['scan_on_startup_bool'] = current_settings_display.get('scan_on_startup', 'false').lower() == 'true'
+                         logging.debug(f"SETTINGS GET: Added derived scan_on_startup_bool: {current_settings_display['scan_on_startup_bool']}")
+                logging.debug("SETTINGS GET: Settings fetched.")
             else:
                 logging.error("SETTINGS GET: Settings lock missing!")
+                # Provide default if lock is missing
+                current_settings_display['scan_on_startup_bool'] = False
 
+            # Fetch container names
             if container_lock_local:
-                with container_lock_local:
-                    running_names = {d['name'] for d in container_statuses_local.values() if isinstance(d, dict) and 'name' in d}
-                logging.debug("SETTINGS GET: Container names fetched.") # <<< ADD 3
-            else:
-                 logging.error("SETTINGS GET: Container statuses lock missing!")
+                with container_lock_local: running_names = {d['name'] for d in container_statuses_local.values() if isinstance(d, dict) and 'name' in d}
+                logging.debug("SETTINGS GET: Container names fetched.")
+            else: logging.error("SETTINGS GET: Container statuses lock missing!")
 
-
-            # Add log before accessing models lock
-            logging.info("SETTINGS GET: Attempting to access models list...") # <<< ADD 4
+            # Fetch models
             if models_lock_local:
-                with models_lock_local:
-                    # Add log inside lock
-                    logging.info(f"SETTINGS GET: Inside models_lock. Current models in app state: {models_local}") # <<< ADD 5
-                    current_models_display = list(models_local) # Make copy under lock
-                    # Add log after reading
-                    logging.info(f"SETTINGS GET: Read models into current_models_display: {current_models_display}") # <<< ADD 6
-            else:
-                logging.error("SETTINGS GET: Models lock missing!")
-                current_models_display = []
+                with models_lock_local: current_models_display = list(models_local)
+                logging.debug(f"SETTINGS GET: Models fetched: {len(current_models_display)}")
+            else: logging.error("SETTINGS GET: Models lock missing!")
 
-
+            # Get ignored list from fetched settings
             ignored_list_display = current_settings_display.get('ignored_containers_list', [])
-            if not isinstance(ignored_list_display, list): ignored_list_display = [] # Ensure list
+            if not isinstance(ignored_list_display, list): ignored_list_display = []
             all_names_display = sorted(list(running_names.union(set(ignored_list_display))))
 
-            # Ensure default colors are present for the template if missing in saved settings
+            # Ensure default colors are present
             default_settings_all = db.DEFAULT_SETTINGS
             for key, default_value in default_settings_all.items():
-                 if key.startswith('color_'):
-                      current_settings_display.setdefault(key, default_value)
+                 if key.startswith('color_'): current_settings_display.setdefault(key, default_value)
 
-            # Ensure ignored_containers_textarea has the right format for potential display (though less likely needed)
-            current_settings_display['ignored_containers_textarea'] = "\n".join(ignored_list_display)
+            # Ensure textarea representation exists if needed
+            current_settings_display.setdefault('ignored_containers_textarea', "\n".join(ignored_list_display))
 
-            logging.info(f"SETTINGS GET: Preparing to render template with models: {current_models_display}") # <<< ADD 7
-            # <<< END OF ADDED LOGGING FOR GET >>>
+            logging.info(f"SETTINGS GET: Preparing to render template...")
 
-            # Pass the actual list for the multi-select's state
             return render_template('settings.html',
-                                   settings=current_settings_display, # Pass all settings for display
-                                   available_models=current_models_display, # Pass the fetched models
-                                   all_container_names=all_names_display, # Pass names for options
-                                   ignored_container_list=ignored_list_display # <<< Pass the actual list for selection
+                                   settings=current_settings_display, # Pass updated settings dict
+                                   available_models=current_models_display,
+                                   all_container_names=all_names_display,
+                                   ignored_container_list=ignored_list_display
                                    )
 
     except AttributeError as e:
-        # Catch errors if locks or state dictionaries themselves are missing from current_app
         logging.exception(f"Failed to access shared state attribute in settings route! Missing attribute: {e}")
         flash(f"Error: Application state attribute not found ({e}) loading settings page. Check logs.", "error")
         return redirect(url_for('ui.index'))
@@ -663,7 +633,8 @@ def regenerate_api_key():
 def view_logs(container_id):
     """Displays the most recent logs for a specific container."""
     # Basic validation for container ID format
-    if not container_id or not all(c in '0123456789abcdefABCDEF' for c in container_id) or len(container_id) < 12:
+    # Use full container ID length check (64 chars)
+    if not container_id or not all(c in '0123456789abcdefABCDEF' for c in container_id.lower()) or len(container_id) != 64:
         logging.warning(f"Invalid container ID format requested in logs view: {container_id}")
         abort(404)
 
@@ -714,13 +685,6 @@ def view_logs(container_id):
         # Keep logs_content empty or set it to the error message
         logs_content = f"--- ERROR FETCHING LOGS ---\n{error_message}\n--- END ERROR ---"
     finally:
-        # If get_docker_client doesn't handle closing, uncomment below
-        # if docker_client:
-        #    try:
-        #        docker_client.close()
-        #        logging.debug("Docker client closed after fetching logs.")
-        #    except Exception as ce:
-        #        logging.warning(f"Error closing Docker client in logs route: {ce}")
         # Assuming analyzer.get_docker_client doesn't manage closing itself
         if docker_client:
              try:
