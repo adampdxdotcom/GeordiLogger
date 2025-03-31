@@ -1,3 +1,9 @@
+Prompt:
+Hello we are building an app. I have included information about in the attched file.
+Your job is to take files that I will provide and modify them with code changes that will be presented with instructions and context. 
+Feel free to make suggestions when you see an error or improvement, but do not make changes that are not asked for. 
+Please let me know if you have any questions about the project or your job, and confirm by telling me your favorite Shrek character. 
+
 Geordi - Log Monitoring Application Summary (Updated)
 
 This document merges the previous summary (summary.3.txt) with updates from the recent development session, reflecting the current state of the project.

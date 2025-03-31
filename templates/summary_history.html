@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}AI Summary History - Geordi Monitor{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+
+    <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+        <h1 class="h2">AI Summary History</h1>
+        <a href="{{ url_for('ui.index') }}" class="btn btn-sm btn-outline-secondary">
+             « Back to Dashboard
+         </a>
+    </div>
+
+    {% if error_message %}
+        <div class="alert alert-danger" role="alert">
+            <strong>Error:</strong> {{ error_message }}
+        </div>
+    {% endif %}
+
+    {# Use the timezone name passed from the route #}
+    <p class="text-muted">Displaying the last {{ limit }} summary generation attempts (Times in {{ display_timezone_name }}).</p>
+
+    {% if records %}
+        <div class="list-group shadow-sm">
+            {% for record in records %}
+                {# Determine context class based on status #}
+                {# <<< Make sure db.py adds a 'status' field based on summary/error text >>> #}
+                {% set status = 'success' if record.summary_text else ('error' if record.error_text else 'skipped') %}
+                {% set list_class = 'list-group-item-success' if status == 'success' else ('list-group-item-danger' if status == 'error' else ('list-group-item-warning' if status == 'skipped' else '')) %}
+                {% set icon_class = 'fas fa-check-circle text-success' if status == 'success' else ('fas fa-times-circle text-danger' if status == 'error' else ('fas fa-forward text-warning' if status == 'skipped' else 'fas fa-question-circle')) %}
+
+                <div class="list-group-item list-group-item-action flex-column align-items-start {{ list_class }}">
+                    <div class="d-flex w-100 justify-content-between mb-2">
+                        <h5 class="mb-1">
+                            <i class="{{ icon_class }} me-2"></i>{{ status | title }}
+                        </h5>
+                        <small class="text-muted">
+                             {# --- FIX: Display the pre-formatted timestamp --- #}
+                             {{ record.formatted_timestamp | default('N/A') }}
+                             {# --- END FIX --- #}
+                        </small>
+                    </div>
+
+                    {# Display Summary or Error #}
+                    {% if status == 'success' and record.summary_text %}
+                        {# Use nl2br if summary text contains newlines #}
+                        <p class="mb-1">{{ record.summary_text | nl2br }}</p>
+                    {% elif status != 'success' and record.error_text %}
+                        <p class="mb-1 fst-italic text-secondary">{{ record.error_text }}</p>
+                    {% else %}
+                        <p class="mb-1 fst-italic text-secondary">(No details recorded)</p>
+                    {% endif %}
+
+                     {# Add placeholder for future actions like 'Notes' or 'Delete' #}
+                     {#
+                     <div class="mt-2 text-end">
+                         <button class="btn btn-sm btn-outline-secondary disabled">Add Note</button>
+                         <button class="btn btn-sm btn-outline-danger disabled">Delete</button>
+                     </div>
+                     #}
+
+                </div>
+            {% endfor %}
+        </div>
+    {% elif not error_message %}
+        <div class="alert alert-info" role="alert">
+            No AI summary history has been recorded yet. Summaries are generated periodically based on your settings.
+        </div>
+    {% endif %}
+
+</div> {# End container #}
+{% endblock %}

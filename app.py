@@ -8,6 +8,10 @@ import json
 # Removed secrets and functools as they were for the removed decorator
 # <<< Import current_app >>>
 from flask import Flask, render_template, redirect, url_for, flash, current_app
+# <<< Import nl2br supporting functions >>>
+from markupsafe import Markup, escape # Used by Flask internally, nl2br needs Markup potentially
+# We will add nl2br manually below
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.base import JobLookupError
@@ -35,6 +39,21 @@ except ImportError as e: logging.critical(f"Import Error: {e}"); exit(1)
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change_this_in_production_please")
 if app.secret_key == "change_this_in_production_please": logging.warning("FLASK_SECRET_KEY is default.")
+
+# --- START: Manually add nl2br filter ---
+# Jinja2/MarkupSafe's nl2br converts newlines to <br> and escapes HTML unless wrapped in Markup
+def nl2br_filter(s):
+    if s:
+        # Escape the input string first to prevent XSS
+        s_escaped = escape(s)
+        # Replace newlines with <br> and mark the whole thing as safe HTML
+        return Markup(s_escaped.replace('\n', '<br>\n'))
+    return ''
+
+app.jinja_env.filters['nl2br'] = nl2br_filter
+logging.info("Added nl2br filter to Jinja environment.")
+# --- END: Manually add nl2br filter ---
+
 
 # --- Register Blueprints ---
 app.register_blueprint(ui_bp)
@@ -506,7 +525,7 @@ def scan_docker_logs():
                 scan_status["next_run_time"] = None
         except Exception as e: logging.error(f"Next run time update error: {e}"); scan_status["next_run_time"] = None
 
-# <<< START REPLACEMENT: update_ai_health_summary FUNCTION (Optimized) >>>
+# <<< START REPLACEMENT: update_ai_health_summary FUNCTION (Optimized + History Save) >>>
 def update_ai_health_summary():
     summary_start_time = datetime.now(timezone.utc)
     final_summary = "Summary generation failed." # Default error summary
@@ -526,11 +545,7 @@ def update_ai_health_summary():
                 # Use .get with defaults for safety
                 summary_hours = settings_local.get('summary_interval_hours', 12)
                 model_to_use = settings_local.get('ollama_model')
-                ollama_url = settings_local.get('ollama_api_url') # <<< Fetch ollama_url here
-                # Get the custom prompt template defined by the user
-                # This prompt is NOT directly used for the summary itself in this optimized version
-                # custom_prompt_template = settings_local.get('analysis_prompt', db.DEFAULT_SETTINGS['analysis_prompt'])
-
+                ollama_url = settings_local.get('ollama_api_url')
 
             # Convert summary_hours to int safely after retrieving
             try: summary_hours = int(summary_hours)
@@ -540,7 +555,7 @@ def update_ai_health_summary():
             # Check prerequisite: Ollama URL
             if not ollama_url:
                 logging.warning("AI Health Summary skipped: Ollama API URL is not configured.")
-                final_summary = "Skipped"
+                final_summary = "Skipped" # Specific value to indicate skipping
                 final_error = "Ollama API URL not configured in settings."
             else:
                 # Check prerequisite: DB function
@@ -563,15 +578,10 @@ def update_ai_health_summary():
                         logging.info(f"Filtered down to {len(unresolved_issues)} unresolved issues.")
 
                         # --- Step 3: Sort by most recent timestamp ---
-                        # Ensure timestamp objects are valid before sorting
                         def get_sort_key(item):
                            ts = item.get('last_detected_timestamp')
-                           # Return a very old date if timestamp is missing or not a datetime object
-                           # Ensure timezone comparison is safe by making default timezone-aware (UTC)
                            return ts if isinstance(ts, datetime) else datetime.min.replace(tzinfo=timezone.utc)
-
                         unresolved_issues.sort(key=get_sort_key, reverse=True)
-
 
                         # --- Step 4: Limit the count ---
                         limited_issues = unresolved_issues[:MAX_SUMMARY_ISSUES]
@@ -580,36 +590,22 @@ def update_ai_health_summary():
                         else:
                              logging.info(f"Using all {len(limited_issues)} unresolved issues for summary input.")
 
-
                         # --- Step 5: Format Reduced Data ---
                         formatted_issue_summaries = []
                         if not limited_issues:
-                            # Case: No unresolved issues found
                             summary_input_data = "No unresolved issues detected recently."
                             logging.info("No unresolved issues to summarize.")
-                            # Decide: Call Ollama just to say "it's healthy" or set summary directly?
-                            # Let's call Ollama to get a potentially more nuanced "healthy" message.
                         else:
-                            # Case: There are issues to format
                             for issue in limited_issues:
                                 container_name = issue.get('container_name', 'UnknownContainer')
                                 analysis_text = issue.get('ollama_analysis', 'Analysis missing')
-
-                                # Truncate analysis text
-                                if analysis_text.startswith("ERROR:"):
-                                    analysis_text = analysis_text[len("ERROR:"):].strip()
+                                if analysis_text.startswith("ERROR:"): analysis_text = analysis_text[len("ERROR:"):].strip()
                                 truncated_analysis = analysis_text[:ANALYSIS_TRUNCATE_LENGTH]
-                                if len(analysis_text) > ANALYSIS_TRUNCATE_LENGTH:
-                                    truncated_analysis += "..."
-
+                                if len(analysis_text) > ANALYSIS_TRUNCATE_LENGTH: truncated_analysis += "..."
                                 formatted_issue_summaries.append(f"- Container: {container_name}, Issue: {truncated_analysis}")
-
                             summary_input_data = "\n".join(formatted_issue_summaries)
 
-
                         # --- Step 6: Prepare the Prompt for Ollama ---
-                        # Use a specific prompt for summarization, instructing it based on the concise input
-
                         summary_prompt = f"""Analyze the following list of recent unresolved container issues.
 Provide a concise (2-4 sentences) health summary identifying the most significant types of active problems.
 **Crucially, for each significant problem type mentioned, list the primary container name(s) experiencing it.**
@@ -621,71 +617,82 @@ Recent Unresolved Issues:
 ---
 Health Summary (mentioning affected containers):"""
 
-# ... (rest of the function: call analyzer, process result) ...
                         # --- Step 7: Call Analyzer ---
                         logging.info(f"Generating health summary using Ollama model {model_to_use} with concise input.")
-                        # Pass the specific summary_prompt, not the analysis_prompt from settings
-                        # Need to get the analyzer module reference correctly
-                        analyzer_module = analyzer # Assuming 'analyzer' is the imported module
-
-                        # <<< CORRECTED CALL: Add api_url argument >>>
-                        summary_or_error = analyzer_module.summarize_recent_abnormalities(
-                            abnormalities_data=None, # Pass None as we pre-formatted
-                            api_url=ollama_url,      # Pass the fetched Ollama URL
+                        summary_or_error = analyzer.summarize_recent_abnormalities(
+                            abnormalities_data=None,
+                            api_url=ollama_url,
                             model_name=model_to_use,
-                            prompt_template=summary_prompt # Pass the constructed prompt directly
+                            prompt_template=summary_prompt
                         )
 
-
                         # --- Step 8: Process result from analyzer ---
-                        # Updated check based on analyzer.py's typical error format
-                        if isinstance(summary_or_error, str) and (summary_or_error.startswith("AI summary generation failed:") or summary_or_error.startswith("Error:")):
-                             # Analyzer returned a specific error message
+                        # Updated check based on analyzer.py returning specific error strings
+                        if isinstance(summary_or_error, str) and summary_or_error.startswith("Error:"): # Analyzer signals error
                              logging.warning(f"AI Summary generation failed: {summary_or_error}")
                              final_summary = "Failed"
                              final_error = summary_or_error # Use the error message from analyzer
-                        elif summary_or_error is None: # Handle None return as failure
+                        elif summary_or_error is None: # Handle explicit None return as failure
                              logging.warning("AI Summary generation failed: Analyzer returned None.")
                              final_summary = "Failed"
                              final_error = "Summary generation failed (analyzer returned None)."
-                        else:
-                             # Success!
+                        else: # Success
                              logging.info("AI Health Summary updated successfully.")
                              final_summary = summary_or_error
                              final_error = None # No error
 
-                    except Exception as db_err:
-                         # Catch errors during DB fetch or processing within this task
+                    except Exception as db_err: # Catch errors during DB fetch or processing
                          logging.exception("Error fetching/processing abnormalities for summary:")
                          final_summary = "Failed"
                          final_error = f"Error processing data for summary: {db_err}"
 
-        except AttributeError as e:
-             # Error accessing app attributes like locks or settings dict
+        except AttributeError as e: # Error accessing app attributes
              logging.error(f"Error accessing app state in update_ai_health_summary: {e}")
              final_summary = "Failed"
              final_error = "Internal error accessing application state."
-        except Exception as e:
-            # Catch any other unexpected errors in this task
+        except Exception as e: # Catch any other unexpected errors
             logging.exception("Unhandled error during AI health summary task:")
             final_summary = "Failed"
             final_error = f"An unexpected internal error occurred: {e}"
         finally:
-            # --- Update global state (still needs lock) ---
+            # --- Step 9: Update global state (always do this) ---
             try:
-                # Access the global dict directly via current_app reference
                 with current_app.ai_summary_lock:
-                     current_app.ai_health_summary["summary"] = final_summary
-                     current_app.ai_health_summary["error"] = final_error
+                     # Update main summary text based on whether there was an error or not
+                     if final_error is None and final_summary != "Skipped":
+                         current_app.ai_health_summary["summary"] = final_summary
+                     elif final_summary == "Skipped":
+                         current_app.ai_health_summary["summary"] = "Summary skipped (Ollama URL not configured)."
+                     else: # An error occurred
+                         current_app.ai_health_summary["summary"] = "Error generating summary (see details)."
+
+                     current_app.ai_health_summary["error"] = final_error # Update error field
                      current_app.ai_health_summary["last_updated"] = summary_start_time
             except AttributeError:
-                 # If current_app or its attributes don't exist when trying to update
                  logging.error("Failed to update global ai_health_summary state (AttributeError).")
             except Exception as update_err:
                  logging.exception("Error updating AI summary state:")
-            # Context is automatically popped by 'with app.app_context()'
 
-# <<< END REPLACEMENT: update_ai_health_summary FUNCTION (Optimized) >>>
+            # --- Step 10: Save result to history DB (always attempt this) ---
+            try:
+                if hasattr(db, 'add_summary_history'):
+                    # Pass the timestamp object, the final summary (None if error/skipped), and the final error (None if success)
+                    # Store the actual summary text only if generation was successful and not skipped
+                    summary_to_store = final_summary if final_error is None and final_summary != "Skipped" else None
+                    db.add_summary_history(
+                        timestamp=summary_start_time,
+                        summary_text=summary_to_store,
+                        error_text=final_error # Save error text if applicable
+                    )
+                    logging.debug(f"Attempted to save summary history. Summary: '{'Yes' if summary_to_store else 'No'}', Error: '{final_error if final_error else 'None'}'")
+                else:
+                    logging.error("Cannot save summary history: db.add_summary_history function not found.")
+            except Exception as history_save_err:
+                 # Log error but don't crash the main task if history save fails
+                 logging.exception(f"Failed to save summary result to history database: {history_save_err}")
+
+            # Context is automatically popped by 'with app.app_context()'
+# <<< END REPLACEMENT: update_ai_health_summary FUNCTION (Optimized + History Save) >>>
 
 
 # --- Scheduler Setup ---

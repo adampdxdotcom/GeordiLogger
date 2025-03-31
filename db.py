@@ -1,6 +1,6 @@
 # db.py
 import sqlite3
-import datetime # Changed from 'import datetime as dt' for consistency
+import datetime
 from datetime import timezone # Import timezone directly
 import logging
 import os
@@ -9,16 +9,12 @@ import json # For storing lists/dicts like ignored containers or colors
 DATABASE_DIR = '/app/data' # Container path where data is mounted
 DATABASE = os.path.join(DATABASE_DIR, 'monitoring_data.db')
 
-# Ensure the data directory exists *inside the container* if mounting a dir
-# This is less critical if bind-mounting the dir itself, but doesn't hurt
-# os.makedirs(DATABASE_DIR, exist_ok=True) # Might cause permission issues if dir mounted from host already exists
-
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s')
 
 # --- Default Settings ---
 DEFAULT_SETTINGS = {
     "ollama_model": os.environ.get("OLLAMA_MODEL", "phi3"),
-    "ollama_api_url": os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/generate"),
+    "ollama_api_url": os.environ.get("OLLAMA_API_URL", "http://localhost:11434"), # Base URL default
     "analysis_prompt": """Analyze the following Docker container logs STRICTLY for CRITICAL errors, application crashes, fatal exceptions, stack traces indicating failure, severe performance degradation (like persistent high resource usage warnings), OOM (Out Of Memory) errors, or potential security breaches (like repeated auth failures).
 
 FOCUS ONLY on issues that indicate service failure, instability, or require immediate attention.
@@ -34,8 +30,8 @@ MUST IGNORE:
 RESPONSE FORMAT:
 1. If ONLY ignored message types are present, respond ONLY with the single word 'NORMAL'. Do not explain. Do not add any other text.
 2. If critical abnormalities ARE found:
-   a. Provide a VERY SHORT (1 sentence maximum) description of the specific critical issue identified.
-   b. Directly after the description, quote the MOST RELEVANT log line(s) (max 3-4 lines) supporting the finding, prefixed exactly with 'Relevant Log(s):'.
+   a. Respond ONLY with a line starting EXACTLY with "ERROR: " followed by a VERY SHORT (1 sentence max) description of the specific critical issue identified.
+   b. After the "ERROR: " line, on a NEW line, quote the MOST RELEVANT log line(s) (max 3-4 lines) supporting the finding, prefixed exactly with 'Relevant Log(s):'.
    c. Do NOT include introductory phrases like "Here is the analysis", "Based on the logs", etc.
 
 --- LOGS ---
@@ -45,9 +41,15 @@ RESPONSE FORMAT:
 Analysis Result:""",
     "color_healthy": "#28a745",
     "color_unhealthy": "#dc3545",
-    "color_error": "#fd7e14",
+    "color_error": "#fd7e14",          # Default general error color
+    "color_error_fetching_logs": "#e67e22", # More specific error colors...
+    "color_error_analysis": "#e74c3c",
+    "color_error_db_log": "#8e44ad",
+    "color_error_db_lookup": "#95a5a6",
     "color_pending": "#ffc107",
     "color_awaiting_scan": "#6f42c1",
+    "color_ignored": "#17a2b8",
+    "color_resolved": "#007bff",
     "ignored_containers": "[]", # Store as JSON list string
     "scan_interval_minutes": str(os.environ.get("SCAN_INTERVAL_MINUTES", "180")),
     "summary_interval_hours": str(os.environ.get("SUMMARY_INTERVAL_HOURS", "12")),
@@ -97,6 +99,8 @@ def _row_to_dict_with_parsed_dates(row):
     # Use the updated _parse_iso_datetime helper
     item['first_detected_timestamp'] = _parse_iso_datetime(item.get('first_detected_timestamp'))
     item['last_detected_timestamp'] = _parse_iso_datetime(item.get('last_detected_timestamp'))
+    # Add parsing for summary_history timestamp if key exists
+    item['timestamp'] = _parse_iso_datetime(item.get('timestamp'))
     return item
 
 # --- Database Initialization (with extra logging) ---
@@ -129,7 +133,7 @@ def init_db():
                 ollama_analysis TEXT,
                 first_detected_timestamp TEXT, /* Store as ISO 8601 String */
                 last_detected_timestamp TEXT, /* Store as ISO 8601 String */
-                status TEXT DEFAULT 'unresolved',
+                status TEXT DEFAULT 'unresolved', /* unresolved, resolved, ignored */
                 resolution_notes TEXT,
                 UNIQUE(container_id, log_snippet)
             )
@@ -146,6 +150,23 @@ def init_db():
                 value TEXT
             )
         ''')
+
+        # --- START: Add Summary History Table ---
+        logging.info("Executing CREATE TABLE IF NOT EXISTS summary_history...")
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS summary_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,      -- ISO 8601 timestamp when generated
+                summary_text TEXT,            -- The AI-generated summary (can be NULL if error)
+                error_text TEXT,              -- Error message if generation failed (can be NULL if success)
+                status TEXT NOT NULL          -- 'success', 'error', 'skipped'
+                -- notes TEXT                -- Optional: Add later for user notes
+            )
+        ''')
+        logging.info("Executing CREATE INDEX for summary_history...")
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_summary_history_timestamp ON summary_history (timestamp DESC);')
+        # --- END: Add Summary History Table ---
+
         logging.info("Finished CREATE TABLE statements.")
 
         conn.commit() # Commit schema changes first
@@ -259,7 +280,6 @@ def get_all_settings():
 
 # --- Abnormality Functions ---
 
-# --- START: Updated add_or_update_abnormality Function ---
 def add_or_update_abnormality(container_name, container_id, log_snippet, ollama_analysis):
     """Adds a new abnormality or updates the last_detected timestamp if an unresolved one exists. Returns the ID of the record."""
     conn = get_db()
@@ -314,7 +334,6 @@ def add_or_update_abnormality(container_name, container_id, log_snippet, ollama_
             conn.close()
 
     return record_id # <<< RETURN THE ID (or None if error)
-# --- END: Updated add_or_update_abnormality Function ---
 
 
 def get_abnormality_status(container_id, log_snippet):
@@ -465,6 +484,97 @@ def get_last_known_status(container_id):
         if conn:
             conn.close()
 
+# --- START: New Summary History Functions ---
+
+def add_summary_history(timestamp, summary_text=None, error_text=None):
+    """Adds a record to the AI summary history table."""
+    conn = get_db()
+    cursor = conn.cursor()
+    record_id = None
+    status = 'unknown'
+
+    # Determine status based on inputs
+    if error_text:
+        status = 'error'
+        summary_text = None # Ensure summary is null if there's an error
+    elif summary_text and "Skipped" in summary_text: # Check if summary indicates skipped
+        status = 'skipped'
+        error_text = summary_text # Store the reason for skipping if available
+        summary_text = None # Ensure summary is null if skipped
+    elif summary_text:
+        status = 'success'
+        error_text = None # Ensure error is null if success
+    else:
+        # Should not happen if called correctly, but handle it
+        status = 'error'
+        error_text = "Internal error: Neither summary nor error text provided."
+        summary_text = None
+
+    try:
+        # Use timezone-aware datetime object for timestamp
+        if not isinstance(timestamp, datetime.datetime):
+            # Attempt to parse if a string was passed, default to now if fails
+            parsed_ts = _parse_iso_datetime(str(timestamp))
+            timestamp_obj = parsed_ts if parsed_ts else datetime.datetime.now(timezone.utc)
+        else:
+            timestamp_obj = timestamp.astimezone(timezone.utc) # Ensure UTC
+
+        timestamp_iso = timestamp_obj.isoformat() # Convert to ISO string for storage
+
+        cursor.execute("""
+            INSERT INTO summary_history
+            (timestamp, summary_text, error_text, status)
+            VALUES (?, ?, ?, ?)
+        """, (timestamp_iso, summary_text, error_text, status))
+        record_id = cursor.lastrowid
+        conn.commit()
+        logging.info(f"Added summary history record ID {record_id} with status '{status}'.")
+
+    except sqlite3.Error as e:
+        logging.error(f"DB Error adding summary history: {e}")
+        conn.rollback()
+        record_id = None
+    except Exception as e:
+        logging.exception("Unexpected error adding summary history:")
+        conn.rollback()
+        record_id = None
+    finally:
+        if conn:
+            conn.close()
+    return record_id
+
+
+def get_summary_history(limit=50):
+    """Fetches the most recent AI summary history records."""
+    conn = get_db()
+    cursor = conn.cursor()
+    results = []
+    try:
+        cursor.execute("""
+            SELECT id, timestamp, summary_text, error_text, status
+            FROM summary_history
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        for row in rows:
+            # Use the helper that also parses the 'timestamp' field
+            parsed_row = _row_to_dict_with_parsed_dates(row)
+            if parsed_row:
+                 results.append(parsed_row)
+        logging.debug(f"Fetched {len(results)} summary history records (limit {limit}).")
+    except sqlite3.Error as e:
+        logging.error(f"Error fetching summary history: {e}")
+    except Exception as e:
+        logging.exception("Unexpected error fetching summary history:")
+    finally:
+        if conn:
+            conn.close()
+    return results
+
+# --- END: New Summary History Functions ---
+
+
 # Initialize the database when this module is first imported
 # This function is now more robust with logging
-init_db()
+# init_db() # Call moved to app.py startup to ensure logging is fully configured first

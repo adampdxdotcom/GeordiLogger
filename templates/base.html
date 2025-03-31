@@ -19,20 +19,37 @@
     {# --- Basic Navigation --- #}
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
       <div class="container-fluid">
-        <a class="navbar-brand" href="{{ url_for('ui.index') }}">Geordi Monitor</a>
+        {# --- Updated Brand with Icon --- #}
+        <a class="navbar-brand" href="{{ url_for('ui.index') }}">
+            <i class="fas fa-binoculars me-2"></i>Geordi Monitor
+        </a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
           <span class="navbar-toggler-icon"></span>
         </button>
         <div class="collapse navbar-collapse" id="navbarNav">
-          <ul class="navbar-nav">
+          {# --- Updated Nav Links with Icons and new History link --- #}
+          <ul class="navbar-nav ms-auto"> {# Use ms-auto to push links right if desired, or keep previous structure #}
             <li class="nav-item">
-              <a class="nav-link {% if request.endpoint == 'ui.index' %}active{% endif %}" aria-current="page" href="{{ url_for('ui.index') }}">Dashboard</a>
+              <a class="nav-link {% if request.endpoint == 'ui.index' %}active{% endif %}" aria-current="page" href="{{ url_for('ui.index') }}">
+                  <i class="fas fa-tachometer-alt"></i> Dashboard
+              </a>
+            </li>
+            {# --- ADDED THIS LIST ITEM --- #}
+            <li class="nav-item">
+              <a class="nav-link {% if request.endpoint == 'ui.summary_history' %}active{% endif %}" href="{{ url_for('ui.summary_history') }}">
+                <i class="fas fa-history"></i> Summary History
+              </a>
+            </li>
+            {# --- END ADDED LIST ITEM --- #}
+            <li class="nav-item">
+              <a class="nav-link {% if request.endpoint == 'ui.settings' %}active{% endif %}" href="{{ url_for('ui.settings') }}">
+                <i class="fas fa-cog"></i> Settings
+              </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link {% if request.endpoint == 'ui.settings' %}active{% endif %}" href="{{ url_for('ui.settings') }}">Settings</a>
-            </li>
-            <li class="nav-item">
-              <a class="nav-link {% if request.endpoint == 'ui.help_page' %}active{% endif %}" href="{{ url_for('ui.help_page') }}">Help</a>
+              <a class="nav-link {% if request.endpoint == 'ui.help_page' %}active{% endif %}" href="{{ url_for('ui.help_page') }}">
+                <i class="fas fa-question-circle"></i> Help
+              </a>
             </li>
           </ul>
         </div>

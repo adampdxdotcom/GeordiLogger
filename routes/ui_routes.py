@@ -4,10 +4,12 @@ from flask import (
     Blueprint, render_template, request, redirect, url_for,
     flash, abort, current_app, jsonify, Response # Added Response
 )
-from datetime import datetime
+# <<< Make sure datetime is imported from datetime >>>
+from datetime import datetime, timezone
 import json # For settings processing
 import secrets # For API key generation in regenerate route
 import docker # Import docker library for logs route errors
+import pytz # Import pytz if get_display_timezone uses it
 
 # Import local modules needed
 import db
@@ -18,10 +20,9 @@ try:
     from utils import get_display_timezone
 except ImportError:
     logging.error("Failed to import get_display_timezone from utils. Timezone functionality may be impaired.")
-    # Provide a fallback if critical, otherwise routes might fail later
+    # Provide a fallback if critical
     def get_display_timezone():
-        import pytz
-        return pytz.utc
+        return pytz.utc # Default to UTC
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +241,63 @@ def help_page():
     """Displays the static help/manual page."""
     logging.debug("Rendering help page.")
     return render_template('help.html')
+
+
+# --- UPDATED ROUTE: AI Summary History ---
+@ui_bp.route('/summary_history')
+def summary_history():
+    """Displays the history of generated AI health summaries."""
+    limit = 50 # How many recent summaries to show
+    history_records = []
+    error_message = None
+    display_timezone_obj = get_display_timezone() # Get the actual timezone object
+
+    try:
+        # Check if the DB function exists
+        if hasattr(db, 'get_summary_history'):
+            raw_records = db.get_summary_history(limit=limit)
+            # db.py's _row_to_dict_with_parsed_dates now handles parsing the timestamp
+
+            # --- START: Format timestamps before sending to template ---
+            formatted_records = []
+            for record in raw_records:
+                if record and isinstance(record.get('timestamp'), datetime):
+                    try:
+                        # Convert to local timezone and format
+                        local_time = record['timestamp'].astimezone(display_timezone_obj)
+                        record['formatted_timestamp'] = local_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+                    except Exception as fmt_err:
+                        logging.warning(f"Error formatting timestamp {record['timestamp']}: {fmt_err}")
+                        # Fallback to ISO string if formatting fails
+                        record['formatted_timestamp'] = record['timestamp'].isoformat()
+                elif record and record.get('timestamp'):
+                     # If it exists but isn't a datetime, display as is
+                     record['formatted_timestamp'] = str(record['timestamp'])
+                elif record:
+                     record['formatted_timestamp'] = 'N/A' # Handle missing timestamp case
+
+                if record: # Ensure record is not None before appending
+                     formatted_records.append(record)
+            # --- END: Format timestamps ---
+
+            history_records = formatted_records # Use the list with formatted timestamps
+
+            if not history_records:
+                logging.info("No AI summary history found in the database.")
+        else:
+            error_message = "Internal Error: Summary history feature not available (DB function missing)."
+            logging.error(error_message)
+
+    except Exception as e:
+        error_message = f"An unexpected error occurred while fetching summary history: {e}"
+        logging.exception("Error fetching summary history:")
+
+    return render_template('summary_history.html',
+                           records=history_records, # Pass the modified records
+                           limit=limit,
+                           error_message=error_message,
+                           # Pass timezone name for display, template doesn't need the object now
+                           display_timezone_name=str(display_timezone_obj))
 
 
 @ui_bp.route('/settings', methods=['GET', 'POST'])
@@ -627,7 +685,7 @@ def view_logs(container_id):
     try:
         # Use the analyzer module function which might handle client caching/closing
         docker_client = analyzer.get_docker_client()
-        if not client:
+        if not docker_client: # Corrected variable name here
             # Raise a specific error if client creation failed internally
             raise ConnectionError("Failed to get Docker client from analyzer.")
 
@@ -678,3 +736,5 @@ def view_logs(container_id):
                            logs_content=logs_content,
                            num_lines=num_lines,
                            error_message=error_message) # Pass error message explicitly
+
+# --- Keep any other routes below ---
