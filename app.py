@@ -877,19 +877,19 @@ Health Summary (mentioning affected containers):"""
             logger.exception(f"Failed to update AI summary cache: {cache_err}")
 
         # --- Save to DB History ---
-        try:
-            if hasattr(db, 'add_summary_history'):
-                # Pass status explicitly, summary only if success, error only if error/skipped
-                db.add_summary_history(
-                    timestamp=summary_start_time,
-                    summary_text=final_summary if status_for_db == 'success' else None,
-                    error_text=final_error if status_for_db != 'success' else None,
-                    status=status_for_db # Pass determined status
-                )
-            else:
-                logger.error("Cannot save summary history: db.add_summary_history function not found.")
-        except Exception as history_save_err:
-             logger.exception(f"Failed to save summary result to history database: {history_save_err}")
+            try:
+                if hasattr(db, 'add_summary_history'):
+                    # Call function without the status argument
+                    db.add_summary_history(
+                        timestamp=summary_start_time,
+                        summary_text=final_summary if status_for_db == 'success' else None,
+                        error_text=final_error if status_for_db != 'success' else None
+                        # Removed status=status_for_db argument
+                    )
+                else:
+                    logger.error("Cannot save summary history: db.add_summary_history function not found.")
+            except Exception as history_save_err:
+                 logger.exception(f"Failed to save summary result to history database: {history_save_err}")
 
     logger.info("AI health summary update finished.")
 # <<< END REPLACEMENT: update_ai_health_summary FUNCTION (Optimized + History Save) >>>

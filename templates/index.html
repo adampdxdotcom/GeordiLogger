@@ -110,16 +110,19 @@
                 {# --- Individual Container Card --- #}
                 <div class="card h-100 shadow-sm">
                     {# Construct the color key like 'color_healthy', 'color_unhealthy', etc. #}
-                    {% set color_key = 'color_' + status_data.status.lower().replace(' ','_').replace('/','_') %}
-                    {% set border_color = color_settings.get(color_key, '#6c757d') %} {# Use status color for border, fallback grey #}
+                    {# Use status_data.get() for safety in case status key is missing #}
+                    {% set status_key = status_data.get('status', 'pending').lower().replace(' ','_').replace('/','_') %}
+                    {% set color_key = 'color_' + status_key %}
+                    {# Use specific error colors if defined, otherwise fallback to general error color, then grey #}
+                    {% set border_color = color_settings.get(color_key, color_settings.get('color_error', '#fd7e14') if status_key.startswith('error') else '#6c757d') %}
 
                     <div class="card-header d-flex justify-content-between align-items-center" style="border-left: 5px solid {{ border_color }}; padding-left: 0.75rem;">
-                        <h5 class="card-title mb-0 text-truncate" title="{{ status_data.name }}"> {# Truncate long names #}
-                             <a href="{{ url_for('ui.container_history', container_id=container_id) }}" class="text-decoration-none link-dark" title="View history for {{ status_data.name }}">
-                                {{ status_data.name }}
+                        <h5 class="card-title mb-0 text-truncate" title="{{ status_data.get('name', 'Unknown') }}"> {# Safe get for name #}
+                             <a href="{{ url_for('ui.container_history', container_id=container_id) }}" class="text-decoration-none link-dark" title="View history for {{ status_data.get('name', 'Unknown') }}">
+                                {{ status_data.get('name', 'Unknown') }}
                             </a>
                         </h5>
-                         <a href="{{ url_for('ui.view_logs', container_id=container_id) }}" class="ms-2" title="View recent logs for {{ status_data.name }}">
+                         <a href="{{ url_for('ui.view_logs', container_id=container_id) }}" class="ms-2" title="View recent logs for {{ status_data.get('name', 'Unknown') }}">
                              <i class="fas fa-file-alt text-secondary"></i>
                          </a>
                     </div>
@@ -127,62 +130,50 @@
                     <div class="card-body">
                         <p class="card-text mb-1">
                             <strong>Status:</strong>
+                            {# --- CHANGE 1: Display Specific Status Text --- #}
                             <span class="fw-bold" style="color: {{ border_color }};">
-                                {# --- CHANGE: Display "Issue Found" for "unhealthy" status --- #}
-                                {% if status_data.status == 'unhealthy' %}
-                                    Issue Found
-                                {% else %}
-                                    {{ status_data.status | title }}
-                                {% endif %}
+                                {% set status_text = status_data.get('status', 'pending') %}
+                                {% if status_text == 'unhealthy' %} Issue Found
+                                {% elif status_text == 'error_fetching_logs' %} Error (Fetch)
+                                {% elif status_text == 'error_analysis' %} Error (Analysis)
+                                {% elif status_text == 'error_db_log' %} Error (DB Log)
+                                {% elif status_text == 'error_db_lookup' %} Error (DB Lookup)
+                                {% elif status_text == 'awaiting_scan' %} Awaiting Scan
+                                {% else %}{{ status_text | title }}{% endif %} {# Default title case for healthy, pending etc. #}
                             </span>
+                            {# --- END CHANGE 1 --- #}
                         </p>
-                        {# --- CHANGE: Display details/snippet/message --- #}
+                        {# --- CHANGE 2: Display Specific Error Detail --- #}
                         <div style="min-height: 3.5em; font-size: 0.9em;"> {# Reserve space, slightly smaller font #}
-                        {% if status_data.status == 'unhealthy' %}
-                            {# Display truncated ANALYSIS text if available #}
+                        {% set current_status = status_data.get('status', 'pending') %} {# Get status safely #}
+                        {% if current_status == 'unhealthy' %}
+                            {# Show truncated analysis for 'unhealthy' #}
                             {% if status_data.details and status_data.details.analysis %}
                                 <p class="text-muted mb-0" title="{{ status_data.details.analysis }}"> {# Full analysis in title #}
                                     <i class="fas fa-exclamation-circle text-danger me-1"></i> Issue: {{ status_data.details.analysis | truncate(70) }}
                                 </p>
                             {% else %}
-                                {# Unhealthy but no details (should be rare) #}
-                                <p class="text-muted mb-0">
-                                    <i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting Scan for Details...
-                                </p>
+                                 <p class="text-muted mb-0"><i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting Scan for Details...</p>
                             {% endif %}
-                        {% elif status_data.status.startswith('error') %}
-                             {# Display truncated ANALYSIS text for errors if available #}
-                             {% if status_data.details and status_data.details.analysis %}
-                                <p class="text-warning mb-0" title="{{ status_data.details.analysis }}">
-                                    <i class="fas fa-times-circle text-warning me-1"></i> Error: {{ status_data.details.analysis | truncate(70) }}
-                                </p>
-                             {% else %}
-                                <p class="text-warning mb-0">
-                                    <i class="fas fa-times-circle text-warning me-1"></i> Error details unavailable.
-                                </p>
-                             {% endif %}
-                        {% elif status_data.status == 'pending' %}
-                            {# Specific message for pending state #}
-                            <p class="text-muted mb-0">
-                                <i class="fas fa-question-circle text-secondary me-1"></i> Awaiting First Scan...
-                            </p>
-                        {% elif status_data.status == 'awaiting_scan' %}
-                            {# Specific message for awaiting_scan state #}
-                             <p class="text-muted mb-0">
-                                <i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting Scan Post-Resolution...
+                        {% elif current_status.startswith('error') %}
+                             {# Show truncated ERROR DETAIL for all error statuses #}
+                             {% set error_detail_text = status_data.get('error_detail', '(No Detail)') %}
+                             <p class="text-warning mb-0" title="{{ error_detail_text }}">
+                                <i class="fas fa-times-circle text-warning me-1"></i> Detail: {{ error_detail_text | truncate(70) }}
                              </p>
-                        {% elif status_data.status in ['resolved', 'ignored'] and status_data.db_id %}
-                             {# Keep existing logic for resolved/ignored with link #}
+                        {% elif current_status == 'pending' %}
+                             <p class="text-muted mb-0"><i class="fas fa-question-circle text-secondary me-1"></i> Awaiting First Scan...</p>
+                        {% elif current_status == 'awaiting_scan' %}
+                             <p class="text-muted mb-0"><i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting Scan Post-Resolution...</p>
+                        {% elif current_status in ['resolved', 'ignored'] and status_data.get('db_id') %}
                              <p class="text-muted mb-0">
-                                <i class="fas fa-info-circle text-info me-1"></i> Prev. issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a> was {{ status_data.status }}.
+                                <i class="fas fa-info-circle text-info me-1"></i> Prev. issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.get('db_id')) }}">#{{ status_data.get('db_id') }}</a> was {{ current_status }}.
                              </p>
-                        {% elif status_data.status == 'healthy' and status_data.db_id %}
-                             {# Keep existing logic for healthy with link to previous #}
+                        {% elif current_status == 'healthy' and status_data.get('db_id') %}
                              <p class="text-muted mb-0">
-                                <i class="fas fa-check-circle text-success me-1"></i> Normal. Prev issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a>.
+                                <i class="fas fa-check-circle text-success me-1"></i> Normal. Prev issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.get('db_id')) }}">#{{ status_data.get('db_id') }}</a>.
                              </p>
-                        {% elif status_data.status == 'healthy' %}
-                             {# Simple healthy state #}
+                         {% elif current_status == 'healthy' %}
                              <p class="text-muted mb-0">
                                 <i class="fas fa-check-circle text-success me-1"></i> Normal
                              </p>
@@ -193,14 +184,15 @@
                              </p>
                         {% endif %}
                         </div>
+                        {# --- END CHANGE 2 --- #}
                     </div> {# End card-body #}
 
                     <div class="card-footer text-end bg-light border-top pt-2 pb-2"> {# Footer for button, lighter bg #}
-                         {# Conditional Manage Button #}
-                         {% if status_data.status == 'unhealthy' and status_data.db_id %}
-                             <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}"
+                         {# Conditional Manage Button - Use safe .get() #}
+                         {% if status_data.get('status') == 'unhealthy' and status_data.get('db_id') %}
+                             <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.get('db_id')) }}"
                                 class="btn btn-sm btn-warning">Manage Issue</a>
-                         {% elif status_data.status == 'unhealthy' and not status_data.db_id %}
+                         {% elif status_data.get('status') == 'unhealthy' and not status_data.get('db_id') %}
                               <span class="badge bg-secondary" title="Cannot manage: DB ID missing, check logs.">DB ID Err</span>
                          {% else %}
                               {# Placeholder to maintain height consistently #}
