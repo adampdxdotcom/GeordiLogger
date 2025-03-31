@@ -9,19 +9,22 @@
     {# --- Page Title/Header --- #}
     <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
         <h1 class="h2">Container Dashboard</h1>
-        {# Add Scheduler Controls Here if desired - example using buttons in a group #}
+        {# Scheduler Controls Buttons pointing to 'scheduler' blueprint endpoints #}
         <div class="btn-toolbar mb-2 mb-md-0">
-             <form action="{{ url_for('trigger_scan') }}" method="post" class="me-2">
+             {# Trigger Scan Button #}
+             <form action="{{ url_for('scheduler.trigger_scan_now') }}" method="post" class="me-2">
                  <button type="submit" class="btn btn-sm btn-outline-secondary {% if scan_is_running %}disabled{% endif %}">
                      <i class="fas fa-sync-alt"></i> Trigger Scan Now
                  </button>
              </form>
-             <form action="{{ url_for('trigger_summary') }}" method="post" class="me-2">
+             {# Trigger Summary Button #}
+             <form action="{{ url_for('scheduler.trigger_summary_now') }}" method="post" class="me-2">
                  <button type="submit" class="btn btn-sm btn-outline-secondary">
                     <i class="fas fa-brain"></i> Trigger Summary Now
                  </button>
              </form>
-            <form action="{{ url_for('pause_schedule') if job_state == 'running' else url_for('resume_schedule') }}" method="post">
+             {# Pause/Resume Button #}
+             <form action="{{ url_for('scheduler.pause') if job_state == 'running' else url_for('scheduler.resume') }}" method="post">
                  {% if job_state == 'running' %}
                  <button type="submit" class="btn btn-sm btn-outline-warning">
                     <i class="fas fa-pause"></i> Pause Schedule
@@ -30,10 +33,16 @@
                  <button type="submit" class="btn btn-sm btn-outline-success">
                     <i class="fas fa-play"></i> Resume Schedule
                  </button>
+                 {# Optionally show something if schedule stopped/error #}
+                 {% elif job_state not in ['running', 'paused'] %}
+                 <button type="button" class="btn btn-sm btn-outline-danger disabled">
+                    <i class="fas fa-exclamation-triangle"></i> Sched Err
+                 </button>
                  {% endif %}
              </form>
+             {# Stop Scan Button #}
              {% if scan_is_running %}
-             <form action="{{ url_for('stop_current_scan') }}" method="post" class="ms-2">
+             <form action="{{ url_for('scheduler.stop_current') }}" method="post" class="ms-2">
                   <button type="submit" class="btn btn-sm btn-danger">
                      <i class="fas fa-stop-circle"></i> Stop Scan
                   </button>
@@ -46,29 +55,31 @@
     <div class="row mb-3">
         {# AI Health Summary Card #}
         <div class="col-md-6 mb-3">
-            <div class="card h-100">
+            <div class="card h-100 shadow-sm">
                 <div class="card-header">AI Health Summary</div>
                 <div class="card-body">
                     {% if ai_summary_error %}
                         <p class="card-text text-danger"><strong>Error:</strong> {{ ai_summary_error }}</p>
                     {% else %}
-                        <p class="card-text">{{ ai_summary | safe }}</p> {# Use 'safe' if summary contains HTML #}
+                        {# Use 'safe' filter if the summary might contain HTML formatting from the AI #}
+                        {# Use 'nl2br' filter to convert newlines to <br> if it's plain text #}
+                        <p class="card-text">{{ ai_summary | safe if ai_summary else 'Summary generation pending or no data.' }}</p>
                     {% endif %}
                 </div>
                 <div class="card-footer text-muted">
-                    Last updated: {{ ai_summary_last_updated }}
+                    Last updated: {{ ai_summary_last_updated if ai_summary_last_updated else 'N/A' }}
                 </div>
             </div>
         </div>
 
         {# Scan Status Card #}
         <div class="col-md-6 mb-3">
-            <div class="card h-100">
+            <div class="card h-100 shadow-sm">
                 <div class="card-header">Scan Status</div>
                 <div class="card-body">
                     <p class="card-text"><strong>Current Status:</strong>
                         {% if scan_is_running %}
-                            <span class="badge bg-primary">Running...</span>
+                            <span class="badge bg-primary">Running...</span> <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
                         {% elif job_state == 'paused' %}
                              <span class="badge bg-warning text-dark">Paused</span>
                         {% elif job_state == 'scheduler_stopped' or job_state == 'scheduler_missing' or job_state == 'scheduler_error' %}
@@ -77,72 +88,83 @@
                             <span class="badge bg-secondary">Idle</span>
                         {% endif %}
                     </p>
-                    <p class="card-text"><strong>Last Scan:</strong> {{ scan_status if scan_status else 'N/A' }}</p>
-                    <p class="card-text"><strong>Next Scan:</strong> {{ next_scan_time if next_scan_time and job_state != 'paused' else 'N/A' }}</p>
-                    <p class="card-text"><small class="text-muted">Times displayed in {{ timezone }}</small></p>
+                    <p class="card-text"><strong>Last Scan Result:</strong><br><small>{{ scan_status if scan_status else 'N/A' }}</small></p>
+                    <p class="card-text"><strong>Next Scheduled Scan:</strong> {{ next_scan_time if next_scan_time and job_state != 'paused' else 'N/A' }}</p>
+                    <p class="card-text"><small class="text-muted">Times displayed in {{ timezone if timezone else 'Server Time' }}</small></p>
                 </div>
-                <div class="card-footer text-muted">
-                    {{ "Scan is currently running." if scan_is_running else "Scan is idle." }}
-                     {{ "Schedule is Paused." if job_state == 'paused' else "" }}
-                </div>
+                {# <div class="card-footer text-muted"> #}
+                    {# Footer content if needed #}
+                {# </div> #}
             </div>
         </div>
     </div>
 
 
-    {# --- Container Status Area - Replaced Table with Cards --- #}
+    {# --- Container Status Area - Cards --- #}
     <h4>Monitored Containers</h4>
-<div class="row row-cols-1 row-cols-md-2 g-4 mb-4"> {# Responsive Grid: 1 col below md, 2 cols on md and up. g-4 adds gutters #}
+    {# Grid: 1 col below md, 2 cols on md and up. g-4 adds gutters #}
+    <div class="row row-cols-1 row-cols-md-2 g-4 mb-4">
         {% if container_statuses %}
             {% for container_id, status_data in container_statuses.items() %}
             <div class="col">
                 {# --- Individual Container Card --- #}
-                <div class="card h-100 shadow-sm"> {# h-100 makes cards in a row the same height, shadow-sm adds subtle shadow #}
+                <div class="card h-100 shadow-sm">
                     {# Construct the color key like 'color_healthy', 'color_unhealthy', etc. #}
                     {% set color_key = 'color_' + status_data.status.lower().replace(' ','_').replace('/','_') %}
-                    {% set border_color = color_settings.get(color_key, '#6c757d') %} {# Use status color for border #}
+                    {% set border_color = color_settings.get(color_key, '#6c757d') %} {# Use status color for border, fallback grey #}
 
-                    <div class="card-header d-flex justify-content-between align-items-center" style="border-left: 5px solid {{ border_color }};"> {# Use status color as left border indicator #}
-                        <h5 class="card-title mb-0">
-                             <a href="{{ url_for('ui.container_history', container_id=container_id) }}" class="text-decoration-none" title="View history for {{ status_data.name }}">
+                    <div class="card-header d-flex justify-content-between align-items-center" style="border-left: 5px solid {{ border_color }}; padding-left: 0.75rem;">
+                        <h5 class="card-title mb-0 text-truncate" title="{{ status_data.name }}"> {# Truncate long names #}
+                             <a href="{{ url_for('ui.container_history', container_id=container_id) }}" class="text-decoration-none link-dark" title="View history for {{ status_data.name }}">
                                 {{ status_data.name }}
                             </a>
                         </h5>
-                         <a href="{{ url_for('ui.view_logs', container_id=container_id) }}" title="View recent logs for {{ status_data.name }}">
+                         <a href="{{ url_for('ui.view_logs', container_id=container_id) }}" class="ms-2" title="View recent logs for {{ status_data.name }}">
                              <i class="fas fa-file-alt text-secondary"></i>
                          </a>
                     </div>
 
                     <div class="card-body">
-                        <p class="card-text">
+                        <p class="card-text mb-1">
                             <strong>Status:</strong>
-                            <span class="fw-bold" style="color: {{ border_color }};"> {# Use border_color for status text too #}
+                            <span class="fw-bold" style="color: {{ border_color }};">
                                 {{ status_data.status | title }}
                             </span>
                         </p>
                         {# Display details/snippet #}
-                        <div style="min-height: 4em;"> {# Reserve space for snippet/action #}
+                        <div style="min-height: 3.5em; font-size: 0.9em;"> {# Reserve space, slightly smaller font #}
                         {% if status_data.status == 'unhealthy' %}
-                            <small class="text-muted d-block mb-2" title="{{ status_data.details.snippet if status_data.details else '' }}">
-                                Issue: {{ status_data.details.snippet | truncate(70) if status_data.details else 'No details' }}
-                            </small>
+                            <p class="text-muted mb-0" title="{{ status_data.details.snippet if status_data.details else '' }}">
+                                <i class="fas fa-exclamation-circle text-danger me-1"></i> Issue: {{ status_data.details.snippet | truncate(70) if status_data.details else 'No details' }}
+                            </p>
                         {% elif status_data.status.startswith('error') %}
-                             <small class="text-muted d-block mb-2" title="{{ status_data.details.analysis if status_data.details else '' }}">
-                                Error: {{ status_data.details.analysis | truncate(70) if status_data.details else 'Scan/DB error details missing' }}
-                             </small>
+                             <p class="text-warning mb-0" title="{{ status_data.details.analysis if status_data.details else '' }}">
+                                <i class="fas fa-times-circle text-warning me-1"></i> Error: {{ status_data.details.analysis | truncate(70) if status_data.details else 'Scan/DB error details missing' }}
+                             </p>
                         {% elif status_data.status in ['resolved', 'ignored'] and status_data.db_id %}
-                             <small class="text-muted d-block mb-2">Prev. issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a> was {{ status_data.status }}.</small>
+                             <p class="text-muted mb-0">
+                                <i class="fas fa-info-circle text-info me-1"></i> Prev. issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a> was {{ status_data.status }}.
+                             </p>
                         {% elif status_data.status == 'awaiting_scan' %}
-                             <small class="text-muted d-block mb-2">Awaiting next scan...</small>
+                             <p class="text-muted mb-0">
+                                <i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting next scan...
+                             </p>
                         {% elif status_data.status == 'healthy' and status_data.db_id %}
-                             <small class="text-muted d-block mb-2">Normal scan. Prev issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a>.</small>
+                             <p class="text-muted mb-0">
+                                <i class="fas fa-check-circle text-success me-1"></i> Normal. Prev issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a>.
+                             </p>
                          {% else %}
-                             <small class="text-muted d-block mb-2">---</small>
+                             {# Healthy (no prev link), Pending, etc #}
+                             <p class="text-muted mb-0">
+                                {% if status_data.status == 'healthy' %}<i class="fas fa-check-circle text-success me-1"></i>{% endif %}
+                                {% if status_data.status == 'pending' %}<i class="fas fa-question-circle text-secondary me-1"></i>{% endif %}
+                                ---
+                             </p>
                         {% endif %}
                         </div>
                     </div> {# End card-body #}
 
-                    <div class="card-footer bg-transparent border-top-0 text-end"> {# Footer for button #}
+                    <div class="card-footer text-end bg-light border-top pt-2 pb-2"> {# Footer for button, lighter bg #}
                          {# Conditional Manage Button #}
                          {% if status_data.status == 'unhealthy' and status_data.db_id %}
                              <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}"
@@ -150,8 +172,8 @@
                          {% elif status_data.status == 'unhealthy' and not status_data.db_id %}
                               <span class="badge bg-secondary" title="Cannot manage: DB ID missing, check logs.">DB ID Err</span>
                          {% else %}
-                              {# Optionally add other actions here #}
-                                {# Non-breaking space to maintain footer height #}
+                              {# Placeholder to maintain height consistently #}
+                              <span style="visibility: hidden;"><a href="#" class="btn btn-sm btn-warning disabled">Manage Issue</a></span>
                          {% endif %}
                     </div>
 
@@ -159,22 +181,19 @@
             </div> {# End Col #}
             {% endfor %}
         {% else %}
-            <div class="col">
-                <div class="alert alert-info" role="alert">
+            <div class="col w-100"> {# Make alert span full width if no containers #}
+                <div class="alert alert-info mt-3" role="alert">
                     No containers found or monitored yet. Ensure Docker is running and check ignored list in settings.
                 </div>
             </div>
         {% endif %}
-    </div> {# End Row #}
+    </div> {# End Row for Container Cards #}
 
 </div> {# End of container-fluid #}
-
 {% endblock %}
 
 
-{# Optional block for page-specific JavaScript if needed later #}
+{# Optional block for page-specific JavaScript #}
 {% block scripts %}
-{# <script> #}
-{#    console.log("Index page specific script loaded"); #}
-{# </script> #}
+{# Add any index-specific JS here if needed in the future #}
 {% endblock %}

@@ -9,9 +9,7 @@ from flask import Blueprint, jsonify, request, current_app, Response
 
 # Import necessary local modules if needed (e.g., for db queries)
 import db
-# Assuming background task functions are still in app.py for now
-# If they move to services later, import from there
-from app import scan_docker_logs, update_ai_health_summary
+# <<< NO import from app here anymore for background tasks >>>
 
 logger = logging.getLogger(__name__)
 
@@ -187,12 +185,17 @@ def api_trigger_scan():
     """Triggers a background log scan immediately."""
     try:
         scan_status_local = getattr(current_app, 'scan_status', {})
+        # <<< Get the function from current_app >>>
+        scan_func = getattr(current_app, 'scan_docker_logs_func', None)
+
         if scan_status_local.get("running"):
             return jsonify({"message": "Scan already in progress."}), 409 # Conflict
+        elif not scan_func:
+             logger.error("API trigger scan failed: Scan function not found on current_app.")
+             return jsonify({"error": "Internal server error: Trigger mechanism unavailable."}), 500
         else:
-            # Run in a separate thread immediately
-            # Need to ensure scan_docker_logs handles app context correctly if called this way
-            scan_thread = threading.Thread(target=scan_docker_logs, name="APIScanThread", daemon=True)
+            # Run in a separate thread using the function from current_app
+            scan_thread = threading.Thread(target=scan_func, name="APIScanThread", daemon=True)
             scan_thread.start()
             logger.info(f"API triggered log scan directly.")
             return jsonify({"message": "Log scan triggered."}), 202 # Accepted
@@ -209,12 +212,18 @@ def api_trigger_scan():
 def api_trigger_summary():
     """Triggers background AI summary generation immediately."""
     try:
-        # Run in a separate thread immediately
-        # Ensure update_ai_health_summary handles app context if needed
-        summary_thread = threading.Thread(target=update_ai_health_summary, name="APISummaryThread", daemon=True)
-        summary_thread.start()
-        logger.info(f"API triggered AI summary directly.")
-        return jsonify({"message": "Summary generation triggered."}), 202 # Accepted
+        # <<< Get the function from current_app >>>
+        summary_func = getattr(current_app, 'update_ai_health_summary_func', None)
+
+        if not summary_func:
+            logger.error("API trigger summary failed: Summary function not found on current_app.")
+            return jsonify({"error": "Internal server error: Trigger mechanism unavailable."}), 500
+        else:
+            # Run in a separate thread using the function from current_app
+            summary_thread = threading.Thread(target=summary_func, name="APISummaryThread", daemon=True)
+            summary_thread.start()
+            logger.info(f"API triggered AI summary directly.")
+            return jsonify({"message": "Summary generation triggered."}), 202 # Accepted
     except Exception as e:
         logger.exception(f"Error triggering API summary:")
         return jsonify({"error": f"Trigger failed due to internal server error."}), 500

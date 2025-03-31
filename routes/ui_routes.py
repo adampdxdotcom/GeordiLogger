@@ -23,6 +23,8 @@ except ImportError:
         import pytz
         return pytz.utc
 
+logger = logging.getLogger(__name__)
+
 # Define the Blueprint for UI routes
 # Assuming templates are in ../templates relative to where app.py is run
 ui_bp = Blueprint('ui', __name__, template_folder='../templates', static_folder='../static')
@@ -201,7 +203,9 @@ def container_history(container_id):
         abort(404) # Not Found for invalid ID format
 
     # Assuming db.get_abnormalities_by_container exists
+    logger.info(f"Fetching history for container_id: {container_id}")
     history_records = db.get_abnormalities_by_container(container_id)
+    logger.info(f"Found {len(history_records)} history records for {container_id}.") 
     container_name = history_records[0]['container_name'] if history_records else f"Unknown Container (ID: {container_id[:12]}...)"
     display_timezone_obj = get_display_timezone()
     current_color_settings = {}

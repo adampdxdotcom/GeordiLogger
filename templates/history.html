@@ -1,19 +1,20 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>History - {{ container_name }}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{% extends "base.html" %}
+{% block title %}History - {{ container_name }}{% endblock %}
+
+{% block content %}
+    {# Page-specific styles #}
     <style>
-        /* Basic styling */
-        body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
-        *, *:before, *:after { box-sizing: border-box; }
-        .container { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; max-width: 1200px; margin-left: auto; margin-right: auto; }
-        h1, h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 0; }
-        pre { background: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.85em; max-height: 200px; overflow-y: auto; border: 1px solid #ddd; }
-        .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; font-size: 0.9em; }
-        .back-link:hover { text-decoration: underline; }
+        /* Basic styling assumed from base.html, only add overrides or specifics */
+        .history-container { /* Use specific class instead of generic .container */
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            max-width: 1200px; /* Allow wider for history maybe */
+            margin-left: auto;
+            margin-right: auto;
+         }
 
         /* History List Styles */
         .history-list { list-style: none; padding: 0; }
@@ -34,9 +35,9 @@
         .detail-block { margin-bottom: 10px; }
         .detail-block strong { display: block; color: #444; margin-bottom: 3px; font-size: 0.9em;}
         .detail-block p { margin: 0; font-size: 0.95em; }
-        .detail-block pre { font-size: 0.8em; }
+        .detail-block pre { background: #eee; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.8em; max-height: 200px; overflow-y: auto; border: 1px solid #ddd; font-family: monospace; } /* Combined pre styles */
 
-        /* NEW: Manage Link Styling */
+        /* Manage Link Styling */
         .manage-link-history {
              font-size: 0.8em;
              margin-left: 15px;
@@ -48,6 +49,8 @@
              white-space: nowrap;
         }
         .manage-link-history:hover { background-color: #e7f3ff; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; font-size: 0.9em; }
+        .back-link:hover { text-decoration: underline; }
 
         /* Responsive */
         @media (max-width: 600px) {
@@ -57,26 +60,26 @@
         }
     </style>
 
-    <!-- === NEW: Dynamic Color Styles === -->
+    {# Dynamic Color Styles Block #}
     {% if color_settings %}
     <style>
-        .history-item[data-status="resolved"] { border-left-color: {{ color_settings.color_healthy | default('#28a745') }}; }
-        .status-resolved { background-color: {{ color_settings.color_healthy | default('#28a745') }}; }
+        /* Use more specific selectors if needed */
+        .history-item[data-status="resolved"] { border-left-color: {{ color_settings.get('color_resolved', color_settings.get('color_healthy', '#28a745')) }}; } /* Use resolved color or fallback to healthy */
+        .status-resolved { background-color: {{ color_settings.get('color_resolved', color_settings.get('color_healthy', '#28a745')) }}; }
 
-        .history-item[data-status="unresolved"] { border-left-color: {{ color_settings.color_unhealthy | default('#dc3545') }}; }
-        .status-unresolved { background-color: {{ color_settings.color_unhealthy | default('#dc3545') }}; }
+        .history-item[data-status="unresolved"] { border-left-color: {{ color_settings.get('color_unhealthy', '#dc3545') }}; }
+        .status-unresolved { background-color: {{ color_settings.get('color_unhealthy', '#dc3545') }}; }
 
-        .history-item[data-status="ignored"] { border-left-color: {{ color_settings.color_pending | default('#ffc107') }}; } /* Use pending/warning color */
-        .status-ignored { background-color: {{ color_settings.color_pending | default('#ffc107') }}; color: #333; } /* Ensure text contrast */
+        .history-item[data-status="ignored"] { border-left-color: {{ color_settings.get('color_ignored', color_settings.get('color_pending', '#ffc107')) }}; } /* Use ignored or fallback to pending */
+        .status-ignored { background-color: {{ color_settings.get('color_ignored', color_settings.get('color_pending', '#ffc107')) }}; color: #333; } /* Ensure text contrast */
 
         /* Add styles if manage.html also needs dynamic colors passed/applied */
     </style>
     {% endif %}
-    <!-- === END: Dynamic Color Styles === -->
+    {# End Dynamic Color Styles Block #}
 
-</head>
-<body>
-    <div class="container">
+
+    <div class="history-container"> {# Changed class to avoid conflict #}
         <a href="{{ url_for('ui.index') }}" class="back-link">« Back to Dashboard</a>
         <h1>Abnormality History</h1>
         <h2>{{ container_name }} <small style="color: #777;">({{ container_id[:12] }})</small></h2>
@@ -90,22 +93,33 @@
                                 <span class="status-badge status-{{ record.status }}">
                                     {{ record.status | replace('_', ' ') | title }}
                                 </span>
-                                {# === NEW: Manage Link for Unresolved === #}
+                                {# Manage Link for Unresolved items #}
                                 {% if record.status == 'unresolved' %}
                                     <a href="{{ url_for('ui.manage_abnormality', abnormality_id=record.id) }}" class="manage-link-history">Manage Issue</a>
                                 {% endif %}
-                                {# === END: Manage Link === #}
+                                {# Optionally, add a link even for resolved/ignored for consistency? #}
+                                {# {% elif record.status in ['resolved', 'ignored'] %}
+                                    <a href="{{ url_for('ui.manage_abnormality', abnormality_id=record.id) }}" class="manage-link-history" title="View Details">View</a>
+                                {% endif %} #}
                             </div>
                             <div class="timestamps">
+                                {# Display formatted timestamps if available #}
                                 {% if record.first_detected_timestamp %}
-                                    First: {{ record.first_detected_timestamp.astimezone(timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z') if record.first_detected_timestamp and timezone_obj else record.first_detected_timestamp.strftime('%Y-%m-%d %H:%M:%S') if record.first_detected_timestamp else 'N/A' }}
-                                    <br>
+                                First: {% if record.first_detected_timestamp and timezone_obj %} {# Check if value and timezone exist #}
+    {{ record.first_detected_timestamp.astimezone(timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z') }}
+{% else %} {# Handle cases where timestamp is None or timezone_obj is missing #}
+    {{ record.first_detected_timestamp if record.first_detected_timestamp else 'N/A' }}
+{% endif %}                                    <br>
                                 {% endif %}
-                                Last: {{ record.last_detected_timestamp.astimezone(timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z') if record.last_detected_timestamp and timezone_obj else record.last_detected_timestamp.strftime('%Y-%m-%d %H:%M:%S') if record.last_detected_timestamp else 'N/A' }}
+Last: {% if record.last_detected_timestamp and timezone_obj %} {# Check if value and timezone exist #}
+    {{ record.last_detected_timestamp.astimezone(timezone_obj).strftime('%Y-%m-%d %H:%M:%S %Z') }}
+{% else %} {# Handle cases where timestamp is None or timezone_obj is missing #}
+    {{ record.last_detected_timestamp if record.last_detected_timestamp else 'N/A' }}
+{% endif %}
                             </div>
                         </div>
 
-                        {# Details - same as before #}
+                        {# Details #}
                         <div class="detail-block">
                             <strong>Ollama Analysis:</strong>
                             <p>{{ record.ollama_analysis | default('(Not Available)', true) }}</p>
@@ -126,6 +140,5 @@
         {% else %}
             <p>No abnormality history found for this container.</p>
         {% endif %} {# End records check #}
-    </div>
-</body>
-</html>
+    </div> {# End history-container #}
+{% endblock %}

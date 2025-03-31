@@ -5,16 +5,18 @@ from datetime import datetime, timedelta, timezone
 import threading
 from threading import Lock
 import json
-import secrets # For API key generation
-import functools # For API key decorator
-from flask import Flask, render_template, request, redirect, url_for, flash, abort, jsonify # Added jsonify
+# Removed secrets and functools as they were for the removed decorator
+from flask import Flask, render_template, redirect, url_for, flash # Removed jsonify, request, abort
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.base import JobLookupError
 import pytz
 import docker
+# --- Import Blueprints ---
 from routes.ui_routes import ui_bp
+from routes.api_routes import api_bp # <<< ADD THIS IMPORT
 from utils import get_display_timezone
+from routes.scheduler_routes import scheduler_bp
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -32,8 +34,14 @@ except ImportError as e: logging.critical(f"Import Error: {e}"); exit(1)
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change_this_in_production_please")
 if app.secret_key == "change_this_in_production_please": logging.warning("FLASK_SECRET_KEY is default.")
+
+# --- Register Blueprints ---
 app.register_blueprint(ui_bp)
 logging.info("Registered UI Blueprint")
+app.register_blueprint(api_bp) # <<< REGISTER THE API BLUEPRINT
+logging.info("Registered API Blueprint")
+app.register_blueprint(scheduler_bp) # <<< REGISTER THE SCHEDULER BLUEPRINT
+logging.info("Registered Scheduler Blueprint")
 
 # --- Global State Variables ---
 container_statuses = {}; container_statuses_lock = Lock()
@@ -102,29 +110,11 @@ def load_settings():
         analyzer.DEFAULT_OLLAMA_MODEL = app_settings.get('ollama_model')
         logging.info(f"Settings loaded. API Key configured: {'Yes' if app_settings.get('api_key') else 'No'}")
 
-# --- API Key Authentication Decorator ---
-def require_api_key(f):
-    @functools.wraps(f)
-    def decorated_function(*args, **kwargs):
-        provided_key = None
-        # Use thread-safe read for settings
-        with settings_lock:
-            api_key_setting = app_settings.get('api_key')
-        if not api_key_setting:
-            logging.warning(f"API access denied: Key not configured (Endpoint: {request.endpoint}).")
-            return jsonify({"error": "API access requires configuration."}), 403
-        auth_header = request.headers.get('Authorization')
-        if auth_header and auth_header.startswith('Bearer '): provided_key = auth_header.split('Bearer ')[1]
-        elif request.headers.get('X-Api-Key'): provided_key = request.headers.get('X-Api-Key')
-        elif request.args.get('api_key'): provided_key = request.args.get('api_key')
-        if not provided_key: return jsonify({"error": "API key required."}), 401
-        # Use secrets.compare_digest for timing attack resistance
-        if provided_key and api_key_setting and secrets.compare_digest(provided_key, api_key_setting):
-            return f(*args, **kwargs)
-        else:
-            logging.warning(f"Invalid API key provided for endpoint '{request.endpoint}'.")
-            return jsonify({"error": "Invalid API key."}), 401
-    return decorated_function
+
+# --- REMOVE API Key Authentication Decorator ---
+# def require_api_key(f): # <<< THIS FUNCTION IS REMOVED
+#    ...
+
 
 # --- Background Tasks ---
 
@@ -245,6 +235,11 @@ def scan_docker_logs():
     global container_statuses, available_ollama_models, scan_status # Added scan_status
     if scan_status["running"]: logging.warning("Scan skipped: previous active."); return
     try:
+        # NOTE: If running outside Flask request context (e.g., APScheduler directly),
+        # accessing `app` or `current_app` might require `app.app_context().push()`.
+        # However, these background tasks currently access global variables with locks,
+        # which avoids the direct need for Flask's app context here.
+        # If they needed flask functions like url_for, context would be necessary.
         with settings_lock: current_settings = app_settings.copy()
         log_lines = int(current_settings.get('log_lines_to_fetch', 100))
         analysis_prompt = current_settings.get('analysis_prompt', db.DEFAULT_SETTINGS['analysis_prompt'])
@@ -517,6 +512,7 @@ def update_ai_health_summary():
     global ai_health_summary
     summary_start_time = datetime.now(timezone.utc) # Record start time regardless of settings
     try:
+        # Similar note as scan_docker_logs about app context.
         with settings_lock:
             summary_hours = int(app_settings.get('summary_interval_hours', 12))
             model_to_use = app_settings.get('ollama_model')
@@ -571,164 +567,6 @@ def update_ai_health_summary():
              ai_health_summary["last_updated"] = summary_start_time
 
 
-# --- Scheduler Control Routes ---
-@app.route('/pause_schedule', methods=['POST'])
-def pause_schedule():
-    global scan_status # Need to update status
-    try:
-        if scheduler.running:
-            scheduler.pause_job('docker_log_scan_job');
-            logging.info("Schedule paused by user."); flash("Schedule paused.", "success");
-            scan_status["next_run_time"] = None # Explicitly set next run time to None
-            # Update last status message?
-            # scan_status["last_run_status"] = "Paused by user."
-        else: flash("Scheduler not running.", "warning")
-    except JobLookupError: flash("Job 'docker_log_scan_job' not found to pause.", "warning")
-    except Exception as e: logging.error(f"Error pausing schedule: {e}"); flash(f"Error pausing schedule: {e}", "error")
-    finally: return redirect(url_for('ui.index'))
-
-@app.route('/resume_schedule', methods=['POST'])
-def resume_schedule():
-    global scan_status # Need to update status
-    try:
-        if scheduler.running:
-            with settings_lock: scan_interval = app_settings.get('scan_interval_minutes', 180)
-            next_run_time = datetime.now(get_display_timezone()) + timedelta(seconds=5)
-            scheduler.reschedule_job(
-                'docker_log_scan_job',
-                trigger=IntervalTrigger(minutes=scan_interval),
-                next_run_time=next_run_time
-            )
-            scan_status["next_run_time"] = next_run_time # Update status display immediately
-            logging.info(f"Schedule resumed by user. Next scan at {next_run_time.strftime('%H:%M:%S %Z')}.")
-            flash("Schedule resumed.", "success")
-        else: flash("Scheduler not running.", "warning")
-    except JobLookupError: flash("Job 'docker_log_scan_job' not found to resume.", "warning")
-    except Exception as e: logging.error(f"Error resuming schedule: {e}"); flash(f"Error resuming schedule: {e}", "error")
-    finally: return redirect(url_for('ui.index'))
-
-@app.route('/stop_current_scan', methods=['POST'])
-def stop_current_scan():
-    if scan_status["running"]: stop_scan_event.set(); flash("Stop signal sent to running scan.", "info");
-    else: flash("No scan is currently running.", "info");
-    return redirect(url_for('ui.index'))
-
-@app.route('/trigger_scan', methods=['POST'])
-def trigger_scan():
-    try:
-        if scan_status["running"]: flash("Scan is already running.", "warning")
-        else:
-            # Run in a separate thread immediately to avoid scheduler interaction/delay
-            scan_thread = threading.Thread(target=scan_docker_logs, name="ManualScanThread", daemon=True)
-            scan_thread.start()
-            logging.info(f"Manual log scan triggered directly via UI."); flash("Manual scan triggered.", "success")
-    except Exception as outer_e: logging.error(f"Unexpected error in trigger_scan route: {outer_e}"); flash("An unexpected error occurred while triggering scan.", "error")
-    finally: return redirect(url_for('ui.index'))
-
-@app.route('/trigger_summary', methods=['POST'])
-def trigger_summary():
-    try:
-        # Run in a separate thread immediately
-        summary_thread = threading.Thread(target=update_ai_health_summary, name="ManualSummaryThread", daemon=True)
-        summary_thread.start()
-        logging.info(f"Manual AI summary triggered directly via UI."); flash("Manual summary triggered.", "success")
-    except Exception as outer_e: logging.error(f"Unexpected error in trigger_summary route: {outer_e}"); flash("An unexpected error occurred while triggering summary.", "error")
-    finally: return redirect(url_for('ui.index'))
-
-# --- API Endpoints ---
-@app.route('/api/status', methods=['GET'])
-def api_status():
-    with ai_summary_lock: summary_data = ai_health_summary.copy()
-    last_updated = summary_data.get('last_updated'); last_updated_iso = last_updated.isoformat(timespec='seconds')+"Z" if isinstance(last_updated, datetime) else None
-    next_run = scan_status.get('next_run_time') # Use the global status
-    next_run_iso = next_run.astimezone(timezone.utc).isoformat(timespec='seconds')+"Z" if isinstance(next_run, datetime) else None
-
-    # Check scheduler job status more reliably
-    job = None; is_paused = False
-    if scheduler.running:
-        try:
-            job = scheduler.get_job('docker_log_scan_job')
-            # Check if job exists and next_run_time is None (APScheduler's way of indicating pause)
-            if job and job.next_run_time is None: is_paused = True
-        except JobLookupError: job = None
-        except Exception as e: logging.error(f"Error checking job status in API: {e}")
-
-
-    return jsonify({ "ai_summary": summary_data.get('summary'), "ai_summary_last_updated_utc": last_updated_iso,
-        "ai_summary_error": summary_data.get('error'), "scan_last_status_message": scan_status.get('last_run_status'),
-        "scan_running": scan_status.get('running'), "scan_next_run_utc": next_run_iso,
-        "scheduler_running": scheduler.running,
-        "scan_job_paused": is_paused })
-
-@app.route('/api/containers', methods=['GET'])
-def api_containers():
-    with container_statuses_lock:
-        statuses_copy = {}
-        # Ensure db_id is only included when status is actually 'unhealthy' after the scan logic runs
-        for cid, data in container_statuses.items():
-            statuses_copy[cid] = {
-                "id": data.get("id"),
-                "name": data.get("name"),
-                "status": data.get("status"),
-                "db_id": data.get("db_id") if data.get("status") == 'unhealthy' else None
-            }
-    return jsonify(statuses_copy)
-
-
-@app.route('/api/issues', methods=['GET'])
-def api_issues():
-    allowed_statuses = ['unresolved', 'resolved', 'ignored', 'all']; status_filter = request.args.get('status', 'unresolved').lower()
-    if status_filter not in allowed_statuses: return jsonify({"error": f"Invalid status filter. Allowed: {', '.join(allowed_statuses)}"}), 400
-    try:
-        limit_str = request.args.get('limit', '100')
-        limit = int(limit_str)
-        if limit <= 0: raise ValueError()
-    except ValueError:
-        return jsonify({"error": "Invalid limit parameter. Must be a positive integer."}), 400
-
-    # Ensure DB function exists
-    if not hasattr(db, 'get_abnormalities_by_status'):
-        logging.error("API Error: Database function 'get_abnormalities_by_status' is missing.")
-        return jsonify({"error": "Internal server error (database function unavailable)."}), 500
-
-    try:
-        issues = db.get_abnormalities_by_status(status=status_filter, limit=limit)
-        # Convert datetime objects to ISO format strings for JSON compatibility
-        for issue in issues:
-            # Check if 'timestamp' exists and is a datetime before formatting
-            if 'timestamp' in issue and isinstance(issue.get('timestamp'), datetime):
-                issue['timestamp'] = issue['timestamp'].isoformat()
-            # Check if 'last_seen' exists and is a datetime before formatting
-            if 'last_seen' in issue and isinstance(issue.get('last_seen'), datetime):
-                 issue['last_seen'] = issue['last_seen'].isoformat()
-        return jsonify(issues)
-    except Exception as e:
-        logging.error(f"Error fetching issues for API: {e}")
-        return jsonify({"error": "Failed to retrieve issues from database."}), 500
-
-
-@app.route('/api/scan/trigger', methods=['POST'])
-@require_api_key
-def api_trigger_scan():
-    if scan_status["running"]: return jsonify({"message": "Scan already in progress."}), 409
-    else:
-        try:
-            # Run in a separate thread immediately
-            scan_thread = threading.Thread(target=scan_docker_logs, name="APIScanThread", daemon=True)
-            scan_thread.start()
-            logging.info(f"API triggered log scan directly"); return jsonify({"message": "Log scan triggered."}), 202
-        except Exception as e: logging.error(f"Error triggering API scan: {e}"); return jsonify({"error": f"Trigger failed: {e}"}), 500
-
-@app.route('/api/summary/trigger', methods=['POST'])
-@require_api_key
-def api_trigger_summary():
-    try:
-        # Run in a separate thread immediately
-        summary_thread = threading.Thread(target=update_ai_health_summary, name="APISummaryThread", daemon=True)
-        summary_thread.start()
-        logging.info(f"API triggered AI summary directly"); return jsonify({"message": "Summary generation triggered."}), 202
-    except Exception as e: logging.error(f"Error triggering API summary: {e}"); return jsonify({"error": f"Trigger failed: {e}"}), 500
-
 # --- Scheduler Setup ---
 def setup_scheduler():
     global scheduler, scan_status # Added scan_status to modify
@@ -748,7 +586,7 @@ def setup_scheduler():
         logging.info(f"Scheduling first log scan to run around: {first_scan_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
         scheduler.add_job(
-            scan_docker_logs,
+            scan_docker_logs, # The job references the function directly
             trigger=IntervalTrigger(minutes=scan_interval, timezone=display_timezone), # Explicitly set trigger TZ
             id='docker_log_scan_job',
             name='Log Scan',
@@ -766,7 +604,7 @@ def setup_scheduler():
         # Schedule first summary shortly after startup
         first_summary_time = datetime.now(display_timezone) + timedelta(minutes=2) # Small delay
         scheduler.add_job(
-            update_ai_health_summary,
+            update_ai_health_summary, # The job references the function directly
             trigger=IntervalTrigger(hours=summary_interval, timezone=display_timezone), # Explicitly set trigger TZ
             id='ai_summary_job',
             name='AI Summary',
@@ -797,7 +635,9 @@ if __name__ == '__main__':
         fetch_initial_ollama_models()
         populate_initial_statuses() # <-- Call added here
         setup_scheduler() # Setup and start background jobs
-   # --- Attach shared state/objects directly to the app instance ---
+
+        # --- Attach shared state/objects directly to the app instance ---
+        # This makes them accessible within blueprints via current_app
         app.app_settings = app_settings
         app.settings_lock = settings_lock
         app.container_statuses = container_statuses
@@ -809,9 +649,15 @@ if __name__ == '__main__':
         app.available_ollama_models = available_ollama_models
         app.models_lock = models_lock
         app.scheduler = scheduler # Attach scheduler instance
-        logging.info("Attached shared state to Flask app object.")
         app.analyzer = analyzer
-    # --- End attaching state ---
+        app.db = db # Make DB module accessible if needed in blueprints
+
+        # <<< ADD THESE LINES TO ATTACH FUNCTION REFERENCES >>>
+        app.scan_docker_logs_func = scan_docker_logs
+        app.update_ai_health_summary_func = update_ai_health_summary
+        # <<< END ADD >>>
+
+        logging.info("Attached shared state and task functions to Flask app object.") # Updated log message
 
     except Exception as startup_err:
          logging.critical(f"Critical error during application startup: {startup_err}", exc_info=True)
