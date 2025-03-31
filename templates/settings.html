@@ -1,10 +1,8 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings - Geordi Log Monitor</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{% extends "base.html" %}
+{% block title %}Settings - Geordi Log Monitor{% endblock %}
+
+{% block content %}
+    {# Styles specific to this page - can be moved to external CSS later #}
     <style>
         /* --- Keep all your existing styles --- */
         body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
@@ -44,8 +42,7 @@
         .flash.warning { color: #856404; background-color: #fff3cd; border-color: #ffeeba; }
         @media (max-width: 600px) { .container { padding: 15px; } h1 { font-size: 1.5em; } .api-key-display-group { flex-direction: column; align-items: stretch; gap: 5px;} .copy-button { margin-top: 5px; text-align: center; } .api-key-action-section .api-key-regen-form { display: block; margin-bottom: 5px; } .api-key-action-section .button-success { width: 100%; } }
     </style>
-</head>
-<body>
+
     <div class="container">
         <a href="{{ url_for('ui.index') }}" class="back-link">« Back to Dashboard</a>
         <h1>Settings</h1>
@@ -132,7 +129,7 @@
             <div class="form-group">
                 <label for="analysis_prompt">Log Analysis Prompt:</label>
                 <textarea id="analysis_prompt" name="analysis_prompt" class="form-control" rows="8">{{ settings.get('analysis_prompt', '') }}</textarea>
-                <p class="help-text">Prompt for Ollama. Must include `{log_data}` placeholder. Instruct it to find critical issues or reply 'NORMAL'.</p>
+                <p class="help-text">Prompt for Ollama. Must include `{logs}` placeholder. Instruct it to find critical issues or reply 'NORMAL'.</p> {# Corrected placeholder name #}
                  <div style="margin-top: 5px;">
                     <button type="button" class="button button-small button-secondary" onclick="copyPrompt()">Copy Prompt</button>
                     <button type="button" class="button button-small button-warning" onclick="clearPrompt()">Clear Prompt</button>
@@ -155,15 +152,11 @@
                 <p class="help-text">Number of recent log lines analyzed per container (e.g., 100).</p>
             </div>
             <div class="form-group">
-                <label for="ignored_containers">Containers to Ignore:</label>
-                <select id="ignored_containers" name="ignored_containers" class="form-control" multiple style="min-height: 150px;">
-                     {% for name in all_container_names | sort %}
-                        <option value="{{ name }}" {% if name in ignored_container_list %}selected{% endif %}>{{ name }}</option>
-                    {% endfor %}
-                </select>
-                <p class="help-text">Select containers to exclude from scans (Ctrl/Cmd+Click for multiple).</p>
+                <label for="ignored_containers_textarea">Containers to Ignore (one per line):</label>
+                <textarea id="ignored_containers_textarea" name="ignored_containers" class="form-control" rows="5" placeholder="container-name-1
+container-name-2">{{ settings.get('ignored_containers_textarea', '') }}</textarea> {# Use textarea helper variable #}
+                <p class="help-text">Enter names of containers to exclude from scans, one name per line.</p>
             </div>
-
 
              <!-- --- Summary Settings --- -->
             <h3>Summary Configuration</h3>
@@ -268,5 +261,4 @@
         function copyPrompt() { var promptTextarea = document.getElementById("analysis_prompt"); var copyButton = event.currentTarget || event.srcElement; copyToClipboard(promptTextarea ? promptTextarea.value : null, copyButton, 'Copied!', 'Copy Failed', 'Copy Prompt'); }
         function clearPrompt() { var promptTextarea = document.getElementById("analysis_prompt"); var statusSpan = document.getElementById("promptCopyStatus"); if (promptTextarea) { promptTextarea.value = ''; if(statusSpan) { statusSpan.textContent = 'Cleared!'; setTimeout(() => { statusSpan.textContent = ''; }, 1500); } } }
     </script>
-</body>
-</html>
+{% endblock %}

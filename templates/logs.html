@@ -1,0 +1,86 @@
+{% extends "base.html" %} {# Assuming you have a base template, otherwise use basic HTML structure #}
+
+{% block title %}Logs for {{ container_name }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>
+        Logs for Container: {{ container_name }}
+        <small class="text-muted">({{ container_id[:12] }})</small>
+    </h2>
+    <hr>
+
+    {% if error_message %}
+        <div class="alert alert-danger" role="alert">
+            <strong>Error:</strong> {{ error_message }}
+        </div>
+    {% endif %}
+
+    {# Form for changing number of lines #}
+    <form method="GET" action="{{ url_for('ui.view_logs', container_id=container_id) }}" class="row g-3 align-items-center mb-3">
+        <div class="col-auto">
+            <label for="lines-input" class="col-form-label">Show last:</label>
+        </div>
+        <div class="col-auto">
+            <input type="number" class="form-control" id="lines-input" name="lines" value="{{ num_lines }}" min="10" max="10000" style="width: 100px;">
+        </div>
+        <div class="col-auto">
+            <span class="form-text">lines.</span>
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary btn-sm">Refresh</button>
+        </div>
+        <div class="col-auto ms-auto"> {# Push copy button to the right #}
+             <button type="button" id="copy-logs-button" class="btn btn-secondary btn-sm">
+                <i class="far fa-copy"></i> Copy Logs {# Assuming Font Awesome #}
+             </button>
+        </div>
+    </form>
+
+    {# Log Display Area #}
+    <div class="log-container bg-dark text-light p-3 rounded" style="max-height: 70vh; overflow-y: scroll;">
+        <pre id="log-content" style="white-space: pre-wrap; word-wrap: break-word; margin-bottom: 0;">{# CSS for wrapping #}{{ logs_content if logs_content else 'No logs found or an error occurred.' }}</pre>
+    </div>
+
+</div>
+
+{# JavaScript for Copy Button #}
+<script>
+    document.getElementById('copy-logs-button').addEventListener('click', function() {
+        const logContentElement = document.getElementById('log-content');
+        const logs = logContentElement.textContent;
+        const button = this; // Reference to the button itself
+
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(logs).then(function() {
+                // Success feedback
+                const originalText = button.innerHTML;
+                button.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                button.classList.add('btn-success');
+                button.classList.remove('btn-secondary');
+                setTimeout(() => {
+                    button.innerHTML = originalText;
+                    button.classList.remove('btn-success');
+                    button.classList.add('btn-secondary');
+                }, 2000); // Reset after 2 seconds
+            }, function(err) {
+                // Error feedback
+                console.error('Failed to copy logs: ', err);
+                alert('Failed to copy logs. See console for details.');
+            });
+        } else {
+            // Fallback for insecure contexts or old browsers (optional)
+            console.warn('Clipboard API not available or context is not secure.');
+             // You could try the older document.execCommand('copy') here, but it's deprecated.
+             alert('Cannot copy logs in this context. Try HTTPS or a modern browser.');
+        }
+    });
+
+    // Auto-scroll to bottom (optional) - run after logs are potentially loaded
+    const logContainer = document.querySelector('.log-container');
+    if(logContainer) {
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+</script>
+
+{% endblock %}

@@ -2,15 +2,16 @@
 import logging
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    flash, abort, current_app, jsonify # Added jsonify just in case
+    flash, abort, current_app, jsonify, Response # Added Response
 )
 from datetime import datetime
 import json # For settings processing
 import secrets # For API key generation in regenerate route
+import docker # Import docker library for logs route errors
 
 # Import local modules needed
 import db
-import analyzer # Needed by settings GET for listing models, and POST for updating config
+import analyzer # Needed by settings GET for listing models, and POST for updating config, and logs route
 
 # Import shared utility function
 try:
@@ -53,7 +54,8 @@ def index():
 
         with current_app.settings_lock:
              # Only fetch color settings needed for index
-             current_color_settings = {k: v for k, v in current_app.app_settings.items() if k.startswith('color_')}
+             app_settings_local = getattr(current_app, 'app_settings', {}) # Safely get app_settings
+             current_color_settings = {k: v for k, v in app_settings_local.items() if k.startswith('color_')}
 
         # Use get() with default for robustness
         current_scan_status = getattr(current_app, 'scan_status', {"last_run_status": "Scan status unavailable", "running": False, "next_run_time": None})
@@ -161,12 +163,14 @@ def manage_abnormality(abnormality_id):
                                      current_cont_status = container_statuses_ref[target_container_id].get('status')
                                      if new_status in ['resolved', 'ignored'] and current_cont_status == 'unhealthy':
                                           container_statuses_ref[target_container_id]['status'] = 'awaiting_scan'
-                                          container_statuses_ref[target_container_id]['db_id'] = None # Don't link resolved/ignored ID on dashboard
-                                          logging.info(f"Set {target_container_id[:12]} to awaiting_scan via manage page.")
+                                          # Keep db_id linked for resolved/ignored cases, maybe?
+                                          # Or clear it? Let's keep it for now to allow linking back from index if needed.
+                                          container_statuses_ref[target_container_id]['db_id'] = abnormality_id
+                                          logging.info(f"Set {target_container_id[:12]} to awaiting_scan via manage page (issue {abnormality_id} {new_status}).")
                                      elif new_status == 'unresolved' and current_cont_status != 'unhealthy':
                                           container_statuses_ref[target_container_id]['status'] = 'unhealthy'
                                           container_statuses_ref[target_container_id]['db_id'] = abnormality_id # Relink the ID
-                                          logging.info(f"Set {target_container_id[:12]} back to unhealthy via manage page.")
+                                          logging.info(f"Set {target_container_id[:12]} back to unhealthy via manage page (issue {abnormality_id} reopened).")
                  # Redirect to index after successful update and cache modification
                  return redirect(url_for('ui.index')) # Use blueprint prefix
             else:
@@ -353,20 +357,27 @@ def settings():
                               current_display_settings[key] = value
                               # Special handling for ignore list textarea
                               if key == 'ignored_containers':
-                                   current_display_settings['ignored_containers_textarea'] = value
+                                   # Try parsing the submitted textarea back into a list for display consistency
+                                   try:
+                                       ignored_from_form = [line.strip() for line in value.splitlines() if line.strip()]
+                                       current_display_settings['ignored_containers_textarea'] = "\n".join(ignored_from_form)
+                                   except Exception:
+                                       current_display_settings['ignored_containers_textarea'] = value # Fallback
+                                       logging.warning("Could not re-process ignored containers textarea after validation error")
+
 
                     # Ensure color defaults are present if missing from saved settings/form
-                    default_colors = json.loads(db.DEFAULT_SETTINGS.get('status_colors', '{}'))
-                    for color_key, default_color_val in default_colors.items():
-                         setting_color_key = f"color_{color_key.lower().replace(' ','_')}"
-                         current_display_settings.setdefault(setting_color_key, default_color_val)
+                    default_colors = db.DEFAULT_SETTINGS # Get full defaults
+                    for setting_key in default_colors:
+                         if setting_key.startswith('color_'):
+                              current_display_settings.setdefault(setting_key, default_colors[setting_key])
 
 
                     return render_template('settings.html',
                                            settings=current_display_settings, # Pass merged form/saved data
                                            available_models=current_models_display,
                                            all_container_names=all_names_display,
-                                           ignored_container_list=ignored_list_display)
+                                           ignored_container_list=ignored_list_display) # Pass parsed list
 
                 except AttributeError as e_attr:
                     logging.exception(f"AttributeError preparing settings page data after validation failure: {e_attr}")
@@ -403,7 +414,7 @@ def settings():
                                            except: app_settings_ref['ignored_containers_list'] = []
                                        if key in ['scan_interval_minutes','summary_interval_hours','log_lines_to_fetch']:
                                            try: app_settings_ref[key] = int(value)
-                                           except: app_settings_ref[key] = 0 # Or keep default?
+                                           except: app_settings_ref[key] = db.DEFAULT_SETTINGS.get(key) # Use default if cast fails
                                        # Propagate relevant settings to analyzer
                                        if analyzer_instance:
                                             try:
@@ -481,10 +492,10 @@ def settings():
             all_names_display = sorted(list(running_names.union(set(ignored_list_display))))
 
             # Ensure default colors are present for the template if missing in saved settings
-            default_colors = json.loads(db.DEFAULT_SETTINGS.get('status_colors', '{}'))
-            for color_key, default_color_val in default_colors.items():
-                 setting_color_key = f"color_{color_key.lower().replace(' ','_')}" # Construct key like 'color_healthy'
-                 current_settings_display.setdefault(setting_color_key, default_color_val)
+            default_settings_all = db.DEFAULT_SETTINGS
+            for key, default_value in default_settings_all.items():
+                 if key.startswith('color_'):
+                      current_settings_display.setdefault(key, default_value)
 
             # Ensure ignored_containers_textarea has the right format
             current_settings_display['ignored_containers_textarea'] = "\n".join(ignored_list_display)
@@ -540,3 +551,72 @@ def regenerate_api_key():
          flash("Error: Failed to save regenerated API key to database.", 'error')
 
     return redirect(url_for('ui.settings')) # Use blueprint prefix
+
+
+# --- NEW ROUTE: View Container Logs ---
+@ui_bp.route('/logs/<string:container_id>')
+def view_logs(container_id):
+    """Displays the most recent logs for a specific container."""
+    # Basic validation for container ID format
+    if not container_id or not all(c in '0123456789abcdefABCDEF' for c in container_id) or len(container_id) < 12:
+        logging.warning(f"Invalid container ID format requested in logs view: {container_id}")
+        abort(404)
+
+    lines_param = request.args.get('lines', '200') # Default to 200 lines
+    try:
+        num_lines = int(lines_param)
+        if num_lines <= 0 or num_lines > 5000: # Add an upper limit
+            flash(f"Number of lines must be between 1 and 5000. Using {'5000' if num_lines > 5000 else '200'}.", "warning")
+            num_lines = min(max(num_lines, 1), 5000) if num_lines > 0 else 200
+    except ValueError:
+        flash("Invalid number of lines specified, using default (200).", "warning")
+        num_lines = 200
+
+    logs_content = ""
+    container_name = f"Unknown (ID: {container_id[:12]})"
+    error_message = None
+    docker_client = None
+
+    try:
+        # Use the analyzer module function which might handle client caching/closing
+        docker_client = analyzer.get_docker_client()
+        if not docker_client:
+            # Raise a specific error if client creation failed internally
+            raise ConnectionError("Failed to get Docker client from analyzer.")
+
+        container = docker_client.containers.get(container_id)
+        container_name = container.name
+
+        # Fetch logs - returns bytes
+        logging.info(f"Fetching last {num_lines} log lines for container {container_name} ({container_id[:12]})")
+        logs_bytes = container.logs(tail=num_lines, stdout=True, stderr=True, timestamps=True) # Added timestamps
+        logs_content = logs_bytes.decode('utf-8', errors='replace') # Decode bytes to string
+
+    except docker.errors.NotFound:
+        error_message = f"Container with ID '{container_id}' not found."
+        logging.warning(error_message)
+        flash(error_message, "error")
+        # Optional: redirect back or show error on the logs page
+        # return redirect(url_for('ui.index'))
+    except (docker.errors.APIError, ConnectionError, Exception) as e:
+        error_message = f"Error fetching logs for container {container_id}: {e}"
+        logging.exception(f"Error fetching logs for container {container_id}:")
+        flash(error_message, "error")
+        # Keep logs_content empty or set it to the error message
+        logs_content = f"--- ERROR FETCHING LOGS ---\n{error_message}\n--- END ERROR ---"
+    finally:
+        # If get_docker_client doesn't handle closing, uncomment below
+        # if docker_client:
+        #    try:
+        #        docker_client.close()
+        #        logging.debug("Docker client closed after fetching logs.")
+        #    except Exception as ce:
+        #        logging.warning(f"Error closing Docker client in logs route: {ce}")
+        pass
+
+    return render_template('logs.html',
+                           container_id=container_id,
+                           container_name=container_name,
+                           logs_content=logs_content,
+                           num_lines=num_lines,
+                           error_message=error_message) # Pass error message explicitly
