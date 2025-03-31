@@ -304,80 +304,77 @@ def get_ollama_models():
         logger.exception(f"Unexpected error parsing model list from Ollama:")
     return [] # Return empty list in all error cases
 
-# --- Function modified to return specific error strings ---
-def summarize_recent_abnormalities(abnormalities_list, model_to_use=None):
-    """Generates health summary using Ollama. Returns summary string or 'Error: ...' string."""
-    global DEFAULT_OLLAMA_MODEL, OLLAMA_API_URL, OLLAMA_SUMMARY_TIMEOUT # Access globals
+# <<< START REPLACEMENT: summarize_recent_abnormalities FUNCTION (Optimized) >>>
+def summarize_recent_abnormalities(abnormalities_data, api_url, model_name, prompt_template):
+    """
+    Generates health summary using Ollama based on a pre-formatted prompt.
+    Returns summary string or 'Error: ...' string.
 
-    if not abnormalities_list:
-        logger.info("No recent abnormalities provided for summary.")
-        # Return non-error message, but not necessarily a full summary
-        return "No recent abnormalities detected in the monitored period."
+    Args:
+        abnormalities_data: (Ignored) Kept for signature consistency, data is in prompt_template.
+        api_url (str): The full base URL for the Ollama API.
+        model_name (str): The name of the Ollama model to use.
+        prompt_template (str): The fully constructed prompt containing the concise issue list.
+    """
+    # Access global only for timeout setting, other params are passed in
+    global OLLAMA_SUMMARY_TIMEOUT
 
-    effective_model = model_to_use or DEFAULT_OLLAMA_MODEL
-    if not effective_model:
+    # --- Input Validation ---
+    if not model_name:
          logger.error("Ollama model name is missing. Cannot generate summary.")
          return "Error: Ollama model not configured." # Return prefixed error
 
-    generate_url = OLLAMA_API_URL
-    if not generate_url:
+    if not api_url:
          logger.error("Cannot generate summary, Ollama API URL is not configured!")
          return "Error: Ollama API URL is not set." # Return prefixed error
 
-    # Construct endpoint
-    if '/api/' in generate_url: base_url = generate_url.split('/api/', 1)[0]
-    else: base_url = generate_url.rstrip('/')
-    api_endpoint = f"{base_url}/api/generate"
+    if not prompt_template:
+         logger.error("Cannot generate summary, the prompt template is empty!")
+         return "Error: Internal error - summary prompt is missing." # Return prefixed error
 
-    logging.info(f"Generating health summary using Ollama model: {effective_model}")
+    # Construct endpoint from the passed api_url
+    try:
+        if '/api/' in api_url: base_url = api_url.split('/api/', 1)[0]
+        else: base_url = api_url.rstrip('/')
+        api_endpoint = f"{base_url}/api/generate"
+    except Exception as url_err:
+        logger.error(f"Error constructing API endpoint from URL '{api_url}': {url_err}")
+        return f"Error: Invalid Ollama API URL provided ({url_err})."
 
-    # --- Format prompt ---
-    formatted_list = ""
-    for item in abnormalities_list:
-        cont_name = item.get('container_name', 'N/A')
-        status = item.get('status', 'N/A')
-        analysis = item.get('ollama_analysis', 'N/A')
-        last_ts = item.get('last_detected_timestamp')
-        try: last_ts_str = last_ts.strftime('%Y-%m-%d %H:%M') if isinstance(last_ts, datetime) else str(last_ts)
-        except: last_ts_str = str(last_ts)
-        formatted_list += (
-            f"- Container: {cont_name}, Status: {status}, Last Seen: {last_ts_str}, "
-            f"Desc: {analysis[:100]}{'...' if len(analysis)>100 else ''}\n"
-        )
-    prompt = f"""You are an IT operations assistant analyzing system health based on recent container issues.
-Provide a concise (1-3 sentences) summary focusing on the overall health trend. Mention the total number of unresolved issues. If specific containers have multiple unresolved issues, highlight them briefly. Avoid listing every single issue.
 
-Recent Container Issues (within monitored period):
-{formatted_list}
---- End List ---
+    logging.info(f"Generating health summary using Ollama model: {model_name}")
 
-Overall System Health Summary:"""
-    # --- End Format prompt ---
+    # --- Use the directly passed prompt ---
+    # The logic to format abnormalities_list is removed, as the caller (app.py) now does this.
+    prompt = prompt_template # Use the prompt passed as an argument
 
     payload = {
-        "model": effective_model, "prompt": prompt, "stream": False,
-        "options": { "temperature": 0.4 }
+        "model": model_name, # Use the passed model name
+        "prompt": prompt,
+        "stream": False,
+        "options": { "temperature": 0.4 } # Keep summary slightly creative
     }
 
     # --- Make API Call with Error Handling ---
     try:
-        logger.debug(f"Sending request for health summary: {api_endpoint}, Model: {effective_model}, Timeout: {OLLAMA_SUMMARY_TIMEOUT}s")
+        logger.debug(f"Sending request for health summary: {api_endpoint}, Model: {model_name}, Timeout: {OLLAMA_SUMMARY_TIMEOUT}s")
         response = requests.post(api_endpoint, json=payload, timeout=OLLAMA_SUMMARY_TIMEOUT)
 
         if response.status_code == 404:
             logger.error(f"Ollama API endpoint not found ({response.status_code}) for summary: {api_endpoint}")
-            if f"model '{effective_model}' not found" in response.text:
-                return f"Error: Summary failed - Ollama model '{effective_model}' not found." # Prefixed error
+            response_text = response.text[:500]
+            if f"model '{model_name}' not found" in response_text:
+                return f"Error: Summary failed - Ollama model '{model_name}' not found." # Prefixed error
             else:
                 return f"Error: Summary failed - Ollama endpoint not found ({response.status_code})." # Prefixed error
 
-        response.raise_for_status()
+        response.raise_for_status() # Raise HTTPError for other bad responses (4xx or 5xx)
 
         result = response.json()
         summary_text = result.get('response', '').strip()
 
         if not summary_text:
-            logger.warning(f"Ollama model {effective_model} returned an empty summary response.")
+            logger.warning(f"Ollama model {model_name} returned an empty summary response.")
             return "Error: AI returned an empty summary." # Return prefixed error
         else:
              logger.info(f"Ollama health summary generated.") # Don't log full summary here potentially
@@ -385,14 +382,15 @@ Overall System Health Summary:"""
 
     except requests.exceptions.Timeout:
          logger.error(f"Timeout ({OLLAMA_SUMMARY_TIMEOUT}s) generating AI summary from {api_endpoint}.")
-         return f"Error: AI summary timed out ({OLLAMA_SUMMARY_TIMEOUT}s)." # Return prefixed error
+         # Make error slightly more specific to the task
+         return f"Error: AI summary request timed out ({OLLAMA_SUMMARY_TIMEOUT}s). Consider increasing OLLAMA_SUMMARY_TIMEOUT env var or using a faster model." # Return prefixed error
     except requests.exceptions.ConnectionError as e:
          logger.error(f"Connection error generating AI summary from {api_endpoint}: {e}")
-         return f"Error: Could not connect to Ollama API at {OLLAMA_API_URL} for summary." # Return prefixed error
+         return f"Error: Could not connect to Ollama API at {api_url} for summary." # Return prefixed error
     except requests.exceptions.HTTPError as e:
         response_text = getattr(response, 'text', '(No response text available)')[:500]
         logger.error(f"Ollama API request failed for summary with status {response.status_code}: {response_text}")
-        return f"Error: Summary failed - Ollama API request error (Status {response.status_code})." # Return prefixed error
+        return f"Error: Summary failed - Ollama API request error (Status {response.status_code}). Check Ollama logs." # Return prefixed error
     except requests.exceptions.RequestException as e:
         error_detail = str(e)
         logger.error(f"Error communicating with Ollama API for summary at {api_endpoint}: {error_detail}")
@@ -403,4 +401,6 @@ Overall System Health Summary:"""
          return f"Error: Invalid JSON summary response from AI." # Return prefixed error
     except Exception as e:
         logger.exception(f"Unexpected error during AI summary generation:")
-        return f"Error: Unexpected failure during AI summary: {e}." # Return prefixed error
+        # Make error slightly more specific
+        return f"Error: Unexpected internal failure during AI summary: {e}." # Return prefixed error
+# <<< END REPLACEMENT: summarize_recent_abnormalities FUNCTION (Optimized) >>>

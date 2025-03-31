@@ -4,10 +4,14 @@
 FROM python:3.11-slim
 
 # Set common environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 # Prevents creation of .pyc files
-ENV PYTHONUNBUFFERED=1      # Prevents python output buffering
-ENV PORT=5001               # Default port application listens on
-ENV TZ="UTC"                # Default timezone (override if needed)
+# Prevents creation of .pyc files
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1      
+# Prevents python output buffering
+ENV PORT=5001               
+# Default port application listens on
+ENV TZ="UTC"                
+# Default timezone (override if needed)
 
 # Set the working directory
 WORKDIR /app
@@ -39,15 +43,18 @@ EXPOSE 5001
 # - Docker Desktop (Mac/Win): http://host.docker.internal:11434
 # - Linux host network access (find IP with `ip addr show docker0`): e.g., http://172.17.0.1:11434
 # - Ollama in another container ('ollama') on same network: http://ollama:11434
-ENV OLLAMA_API_URL="http://host.docker.internal:11434" # <<< Changed to Base URL
-ENV OLLAMA_MODEL="phi3" # Example default
+ENV OLLAMA_API_URL="http://host.docker.internal:11434"
+ENV OLLAMA_MODEL="phi3"
 
 # --- Scan Configuration Defaults ---
 ENV SCAN_INTERVAL_MINUTES="10"
 ENV LOG_LINES_TO_FETCH="200"
-ENV SUMMARY_INTERVAL_HOURS="12" # Add default if app.py uses it
-ENV OLLAMA_TIMEOUT="120" # Add default if app.py uses it
-ENV OLLAMA_SUMMARY_TIMEOUT="180" # Add default if app.py uses it
+ENV SUMMARY_INTERVAL_HOURS="12" 
+# Add default if app.py uses it
+ENV OLLAMA_TIMEOUT="120" 
+# Add default if app.py uses it
+ENV OLLAMA_SUMMARY_TIMEOUT="180" 
+# Add default if app.py uses it
 
 # --- Flask Configuration Default ---
 # CHANGE FLASK_SECRET_KEY via environment variable for security!

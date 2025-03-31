@@ -128,67 +128,36 @@
                         <p class="card-text mb-1">
                             <strong>Status:</strong>
                             <span class="fw-bold" style="color: {{ border_color }};">
-                                {# --- CHANGE: Display "Issue Found" for "unhealthy" status --- #}
-                                {% if status_data.status == 'unhealthy' %}
-                                    Issue Found
-                                {% else %}
-                                    {{ status_data.status | title }}
-                                {% endif %}
+                                {{ status_data.status | title }}
                             </span>
                         </p>
-                        {# --- CHANGE: Display details/snippet/message --- #}
+                        {# Display details/snippet #}
                         <div style="min-height: 3.5em; font-size: 0.9em;"> {# Reserve space, slightly smaller font #}
                         {% if status_data.status == 'unhealthy' %}
-                            {# Display truncated ANALYSIS text if available #}
-                            {% if status_data.details and status_data.details.analysis %}
-                                <p class="text-muted mb-0" title="{{ status_data.details.analysis }}"> {# Full analysis in title #}
-                                    <i class="fas fa-exclamation-circle text-danger me-1"></i> Issue: {{ status_data.details.analysis | truncate(70) }}
-                                </p>
-                            {% else %}
-                                {# Unhealthy but no details (should be rare) #}
-                                <p class="text-muted mb-0">
-                                    <i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting Scan for Details...
-                                </p>
-                            {% endif %}
-                        {% elif status_data.status.startswith('error') %}
-                             {# Display truncated ANALYSIS text for errors if available #}
-                             {% if status_data.details and status_data.details.analysis %}
-                                <p class="text-warning mb-0" title="{{ status_data.details.analysis }}">
-                                    <i class="fas fa-times-circle text-warning me-1"></i> Error: {{ status_data.details.analysis | truncate(70) }}
-                                </p>
-                             {% else %}
-                                <p class="text-warning mb-0">
-                                    <i class="fas fa-times-circle text-warning me-1"></i> Error details unavailable.
-                                </p>
-                             {% endif %}
-                        {% elif status_data.status == 'pending' %}
-                            {# Specific message for pending state #}
-                            <p class="text-muted mb-0">
-                                <i class="fas fa-question-circle text-secondary me-1"></i> Awaiting First Scan...
+                            <p class="text-muted mb-0" title="{{ status_data.details.snippet if status_data.details else '' }}">
+                                <i class="fas fa-exclamation-circle text-danger me-1"></i> Issue: {{ status_data.details.snippet | truncate(70) if status_data.details else 'No details' }}
                             </p>
-                        {% elif status_data.status == 'awaiting_scan' %}
-                            {# Specific message for awaiting_scan state #}
-                             <p class="text-muted mb-0">
-                                <i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting Scan Post-Resolution...
+                        {% elif status_data.status.startswith('error') %}
+                             <p class="text-warning mb-0" title="{{ status_data.details.analysis if status_data.details else '' }}">
+                                <i class="fas fa-times-circle text-warning me-1"></i> Error: {{ status_data.details.analysis | truncate(70) if status_data.details else 'Scan/DB error details missing' }}
                              </p>
                         {% elif status_data.status in ['resolved', 'ignored'] and status_data.db_id %}
-                             {# Keep existing logic for resolved/ignored with link #}
                              <p class="text-muted mb-0">
                                 <i class="fas fa-info-circle text-info me-1"></i> Prev. issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a> was {{ status_data.status }}.
                              </p>
+                        {% elif status_data.status == 'awaiting_scan' %}
+                             <p class="text-muted mb-0">
+                                <i class="fas fa-hourglass-half text-secondary me-1"></i> Awaiting next scan...
+                             </p>
                         {% elif status_data.status == 'healthy' and status_data.db_id %}
-                             {# Keep existing logic for healthy with link to previous #}
                              <p class="text-muted mb-0">
                                 <i class="fas fa-check-circle text-success me-1"></i> Normal. Prev issue <a href="{{ url_for('ui.manage_abnormality', abnormality_id=status_data.db_id) }}">#{{ status_data.db_id }}</a>.
                              </p>
-                        {% elif status_data.status == 'healthy' %}
-                             {# Simple healthy state #}
-                             <p class="text-muted mb-0">
-                                <i class="fas fa-check-circle text-success me-1"></i> Normal
-                             </p>
                          {% else %}
-                             {# Fallback for any other unexpected status #}
+                             {# Healthy (no prev link), Pending, etc #}
                              <p class="text-muted mb-0">
+                                {% if status_data.status == 'healthy' %}<i class="fas fa-check-circle text-success me-1"></i>{% endif %}
+                                {% if status_data.status == 'pending' %}<i class="fas fa-question-circle text-secondary me-1"></i>{% endif %}
                                 ---
                              </p>
                         {% endif %}

@@ -16,7 +16,8 @@
         label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
         .form-control, select.form-control, textarea.form-control { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95em; background-color: #fff; }
         textarea.form-control { min-height: 150px; font-family: monospace; line-height: 1.4; }
-        select[multiple].form-control { min-height: 150px; }
+        select[multiple].form-control { min-height: 150px; } /* Keep this for potential future use or specific styling */
+        select[multiple].form-control[size] { min-height: auto; } /* Override min-height when size is set */
         input[type="color"].form-control { padding: 0; height: 38px; width: 60px; border: 1px solid #ccc; border-radius: 4px; vertical-align: middle; }
         .color-setting label { display: inline-block !important; width: auto !important; margin-right: 10px; font-weight: normal; }
         .color-setting { margin-bottom: 10px; }
@@ -151,12 +152,25 @@
                 <input type="number" id="log_lines_to_fetch" name="log_lines_to_fetch" class="form-control" value="{{ settings.get('log_lines_to_fetch', 100) }}" min="10" max="10000" required>
                 <p class="help-text">Number of recent log lines analyzed per container (e.g., 100).</p>
             </div>
+            {# --- Container Ignore List - Replaced Textarea with Multi-Select --- #}
             <div class="form-group">
-                <label for="ignored_containers_textarea">Containers to Ignore (one per line):</label>
-                <textarea id="ignored_containers_textarea" name="ignored_containers" class="form-control" rows="5" placeholder="container-name-1
-container-name-2">{{ settings.get('ignored_containers_textarea', '') }}</textarea> {# Use textarea helper variable #}
-                <p class="help-text">Enter names of containers to exclude from scans, one name per line.</p>
+                <label for="ignored_containers_select">Containers to Ignore:</label>
+                <select id="ignored_containers_select" name="ignored_containers" class="form-control" multiple size="8"> {# Use 'size' attribute for height #}
+                    {# Loop through all available container names (running + previously ignored) #}
+                    {% if all_container_names %}
+                        {% for name in all_container_names %}
+                            {# Check if this name is in the list of currently ignored containers #}
+                            <option value="{{ name }}" {% if name in ignored_container_list %}selected{% endif %}>
+                                {{ name }}
+                            </option>
+                        {% endfor %}
+                    {% else %}
+                        <option value="" disabled>No running containers found or could not fetch list.</option>
+                    {% endif %}
+                </select>
+                <p class="help-text">Select containers to exclude from scans. Hold Ctrl (or Cmd on Mac) to select multiple. Previously ignored containers not currently running may also appear.</p>
             </div>
+            {# --- End Container Ignore List --- #}
 
              <!-- --- Summary Settings --- -->
             <h3>Summary Configuration</h3>
