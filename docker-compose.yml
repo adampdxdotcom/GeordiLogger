@@ -1,7 +1,7 @@
 services:
   geordi:
     build: .
-    container_name: geordi
+    container_name: GeordiLogger
     restart: unless-stopped
     ports:
       - "5001:5001" # <-- CORRECTED PORT MAPPING
