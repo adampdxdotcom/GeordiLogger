@@ -12,7 +12,7 @@ services:
     environment:
       - TZ=America/Los_Angeles
       - PORT=5001
-      - OLLAMA_API_URL=http://192.168.1.11:11434/api/generate
+      - OLLAMA_API_URL=http://localhost:11434/api/generate
       - OLLAMA_MODEL=llama2-uncensored:7b
       - SCAN_INTERVAL_MINUTES=300 # Note: These are now defaults, overridden by DB settings
       - LOG_LINES_TO_FETCH=20     # Note: These are now defaults, overridden by DB settings
