@@ -14,9 +14,16 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 
     <title>{% block title %}Geordi Log Monitor{% endblock %}</title> {# Default title #}
+    <style>
+      /* Optional: Adjust vertical alignment if needed */
+      .navbar .rounded-circle { vertical-align: middle; }
+      /* Ensure placeholder icon aligns well */
+      .navbar .fa-user-circle { vertical-align: middle; }
+    </style>
   </head>
   <body>
     {# --- Basic Navigation --- #}
+    {# --- MODIFIED NAVBAR --- #}
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
       <div class="container-fluid">
         {# --- Updated Brand with Icon --- #}
@@ -27,20 +34,23 @@
           <span class="navbar-toggler-icon"></span>
         </button>
         <div class="collapse navbar-collapse" id="navbarNav">
-          {# --- Updated Nav Links with Icons and new History link --- #}
-          <ul class="navbar-nav ms-auto"> {# Use ms-auto to push links right if desired, or keep previous structure #}
+          {# Left Aligned Links (if any) - Kept empty as per example #}
+          <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+              {# Add any left-aligned items here if needed #}
+          </ul>
+
+          {# Right Aligned Links & Gravatar #}
+          <ul class="navbar-nav ms-auto mb-2 mb-lg-0 align-items-center"> {# Added align-items-center #}
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'ui.index' %}active{% endif %}" aria-current="page" href="{{ url_for('ui.index') }}">
                   <i class="fas fa-tachometer-alt"></i> Dashboard
               </a>
             </li>
-            {# --- ADDED THIS LIST ITEM --- #}
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'ui.summary_history' %}active{% endif %}" href="{{ url_for('ui.summary_history') }}">
                 <i class="fas fa-history"></i> Summary History
               </a>
             </li>
-            {# --- END ADDED LIST ITEM --- #}
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'ui.settings' %}active{% endif %}" href="{{ url_for('ui.settings') }}">
                 <i class="fas fa-cog"></i> Settings
@@ -51,10 +61,36 @@
                 <i class="fas fa-question-circle"></i> Help
               </a>
             </li>
+
+            {# --- START: Modified Gravatar Section with Placeholder --- #}
+            {# Determine Gravatar URL (or None if no email/error) outside the conditional display #}
+            {% set email_for_gravatar = app_settings.get('gravatar_email') %}
+            {% set final_gravatar_url = generate_gravatar_url(email_for_gravatar, size=30) if email_for_gravatar else None %}
+
+            {# Always render the list item for consistent spacing; add vertical alignment #}
+            <li class="nav-item ms-lg-2 d-flex align-items-center" style="min-width: 30px;"> {# Add min-width to approximate image size #}
+                {% if final_gravatar_url %}
+                    {# Display actual Gravatar image #}
+                    <img src="{{ final_gravatar_url }}"
+                         alt="User Gravatar"
+                         class="rounded-circle" {# Bootstrap class for round images #}
+                         width="30" height="30" {# Explicit size #}
+                         title="Gravatar for {{ email_for_gravatar }}">
+                {% else %}
+                    {# Display placeholder icon if no valid URL #}
+                    <span title="Gravatar Not Set / Default"> {# Tooltip #}
+                        {# Use text-light for dark navbar, fa-lg for size, opacity for subtlety #}
+                        <i class="fas fa-user-circle fa-lg text-light opacity-75"></i>
+                     </span>
+                {% endif %}
+            </li>
+            {# --- END: Modified Gravatar Section with Placeholder --- #}
+
           </ul>
         </div>
       </div>
     </nav>
+    {# --- END MODIFIED NAVBAR --- #}
 
     {# --- Main Content Area --- #}
     <main class="container">

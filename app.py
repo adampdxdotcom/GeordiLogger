@@ -26,7 +26,8 @@ import analyzer
 from routes.ui_routes import ui_bp # Import blueprint
 from routes.api_routes import api_bp # Import blueprint
 from routes.scheduler_routes import scheduler_bp # Import blueprint
-from utils import get_display_timezone # Import utility
+# --- MODIFIED IMPORT ---
+from utils import get_display_timezone, generate_gravatar_url # <<< ADD generate_gravatar_url
 
 # --- Logging Setup ---
 log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -79,6 +80,10 @@ app.jinja_env.filters['nl2br'] = nl2br_filter
 logging.info("Added improved nl2br filter to Jinja environment.")
 # --- END: REVISED nl2br filter ---
 
+# --- START: Add Gravatar URL generator to Jinja ---
+app.jinja_env.globals['generate_gravatar_url'] = generate_gravatar_url
+logging.info("Added generate_gravatar_url function to Jinja environment.")
+# --- END: Add Gravatar URL generator to Jinja ---
 
 # --- Global State Variables ---
 # These hold the current state of monitored containers and settings.
@@ -100,12 +105,39 @@ models_lock = Lock()
 scan_status = {"last_run_status": "Not run yet", "running": False, "next_run_time": None}
 scan_status_lock = Lock()
 
+
+# --- START: Add app_settings to Jinja Globals ---
+# This makes the app_settings dictionary accessible in all templates
+# Note: This is a read-only view for the template; changes still go through settings page/DB.
+@app.context_processor
+def inject_app_settings():
+    # We need the lock here to safely read the dictionary
+    settings_copy = {} # Initialize empty in case of error getting lock/dict
+    try:
+        with settings_lock:
+            # Return a copy to prevent templates from potentially modifying the shared state?
+            # Or trust templates won't modify? Let's return a copy for safety.
+            # Ensure app_settings exists before copying
+            if isinstance(app_settings, dict):
+                settings_copy = app_settings.copy()
+            else:
+                logger.error("inject_app_settings: global app_settings is not a dict!")
+    except Exception as e:
+         logger.error(f"inject_app_settings: Error acquiring lock or copying settings: {e}")
+         # settings_copy remains empty, so templates get an empty dict if error occurs
+
+    return dict(app_settings=settings_copy) # Make it available as 'app_settings' in templates
+
+logging.info("Registered context processor to inject app_settings into Jinja.")
+# --- END: Add app_settings to Jinja Globals ---
+
+
 # --- Attach State and Functions Directly to App Context ---
 # This allows blueprints to access them via current_app
 # Note: Mutating these dicts requires acquiring the corresponding lock first!
 app.container_statuses = container_statuses
 app.container_statuses_lock = container_statuses_lock
-app.app_settings = app_settings
+app.app_settings = app_settings # Keep attaching the original mutable dict here for routes
 app.settings_lock = settings_lock
 app.ai_health_summary = ai_health_summary
 app.ai_summary_lock = ai_summary_lock
@@ -127,17 +159,20 @@ def fetch_initial_ollama_models():
     # Retrieve URL from app_settings (must be loaded before this is called)
     ollama_api_url = None # Initialize
     try:
+        # Safely access app_settings through lock
         with settings_lock:
-            # Get URL safely, fallback to default from db module if needed
-            ollama_api_url = app_settings.get("ollama_api_url", db.DEFAULT_SETTINGS.get("ollama_api_url"))
-            if ollama_api_url:
-                # Update analyzer's URL based on settings at startup
-                analyzer.OLLAMA_API_URL = ollama_api_url
-                logger.info(f"Using Ollama API URL: {ollama_api_url}")
-            else:
-                logger.warning("Ollama API URL not found in settings or defaults. Cannot fetch models.")
-                # Set analyzer URL to None if not found
-                analyzer.OLLAMA_API_URL = None
+             # Use get() for safety
+             settings_url = app_settings.get("ollama_api_url")
+             default_url = db.DEFAULT_SETTINGS.get("ollama_api_url")
+             ollama_api_url = settings_url if settings_url else default_url
+
+        if ollama_api_url:
+            # Update analyzer's URL based on settings at startup
+            analyzer.OLLAMA_API_URL = ollama_api_url
+            logger.info(f"Using Ollama API URL: {ollama_api_url}")
+        else:
+            logger.warning("Ollama API URL not found in settings or defaults. Cannot fetch models.")
+            analyzer.OLLAMA_API_URL = None # Set analyzer URL to None if not found
 
         # Proceed only if URL is set
         if not ollama_api_url:
@@ -149,7 +184,6 @@ def fetch_initial_ollama_models():
         # Check if the return value is a list (it should be, even if empty)
         if isinstance(fetched_models, list):
             with models_lock: # Use the global lock
-                # No 'global' declaration needed here anymore
                 # Use list slicing [:] to update in-place
                 available_ollama_models[:] = fetched_models
             logging.info(f"Successfully fetched {len(fetched_models)} models at startup.")
@@ -159,19 +193,16 @@ def fetch_initial_ollama_models():
             # This case shouldn't happen with the current analyzer code, but good to handle
             logging.error(f"Fetching initial models returned an unexpected type: {type(fetched_models)}. Expected list.")
             with models_lock:
-                # No 'global' declaration needed here anymore
                 available_ollama_models[:] = [] # Ensure it's an empty list
 
     except ValueError as ve: # Catch specific error if URL is missing
         logging.error(f"Cannot fetch Ollama models: {ve}")
         with models_lock:
-            # No 'global' declaration needed here anymore
             available_ollama_models[:] = [] # Reset to empty on error
     except Exception as e:
         # Catch any other unexpected error during the call
         logging.exception("Error calling or processing fetch_initial_ollama_models:")
         with models_lock:
-            # No 'global' declaration needed here anymore
             available_ollama_models[:] = [] # Reset to empty on error
 # <<< END: CORRECTED fetch_initial_ollama_models function >>>
 
@@ -191,7 +222,8 @@ def load_settings():
             int_keys = ['scan_interval_minutes', 'summary_interval_hours', 'log_lines_to_fetch']
             for key in int_keys:
                 try:
-                    app_settings[key] = int(app_settings[key])
+                    # Use get() to avoid KeyError if setting missing entirely from DB/Defaults
+                    app_settings[key] = int(app_settings.get(key))
                 except (ValueError, TypeError, KeyError) as e:
                     logger.warning(f"Could not convert setting '{key}' to int (value: {app_settings.get(key)}, error: {e}). Using default.")
                     try:
@@ -215,37 +247,36 @@ def load_settings():
                  app_settings['ignored_containers_textarea'] = ""
 
             # Ensure API key is loaded (might be empty)
-            if 'api_key' not in app_settings:
-                 app_settings['api_key'] = db.DEFAULT_SETTINGS['api_key']
+            app_settings.setdefault('api_key', db.DEFAULT_SETTINGS.get('api_key', ''))
 
             # Make sure essential Ollama settings are present
-            if 'ollama_api_url' not in app_settings:
-                app_settings['ollama_api_url'] = db.DEFAULT_SETTINGS['ollama_api_url']
-            if 'ollama_model' not in app_settings:
-                app_settings['ollama_model'] = db.DEFAULT_SETTINGS['ollama_model']
+            app_settings.setdefault('ollama_api_url', db.DEFAULT_SETTINGS.get('ollama_api_url', ''))
+            app_settings.setdefault('ollama_model', db.DEFAULT_SETTINGS.get('ollama_model', ''))
 
             # --- ADD: Parse scan_on_startup setting ---
             try:
-                # Get string value, default 'false', convert to bool
+                # Use setdefault to ensure key exists before processing
+                app_settings.setdefault('scan_on_startup', db.DEFAULT_SETTINGS.get('scan_on_startup', 'false'))
                 scan_startup_str = app_settings.get('scan_on_startup', 'false')
                 app_settings['scan_on_startup_bool'] = scan_startup_str.lower() == 'true'
-                # Ensure the string version is also present if it came from defaults only
-                if 'scan_on_startup' not in app_settings:
-                    app_settings['scan_on_startup'] = scan_startup_str
             except Exception as e:
                  logger.error(f"Error processing scan_on_startup setting: {e}. Defaulting to False.")
                  app_settings['scan_on_startup'] = 'false'
                  app_settings['scan_on_startup_bool'] = False
             # --- END ADD ---
 
+            # --- ADD: Ensure gravatar_email setting exists ---
+            app_settings.setdefault('gravatar_email', db.DEFAULT_SETTINGS.get('gravatar_email', ''))
+            # --- END ADD ---
+
             # Propagate key settings to the analyzer module's global scope after loading
-            analyzer.OLLAMA_API_URL = app_settings['ollama_api_url']
-            analyzer.DEFAULT_OLLAMA_MODEL = app_settings['ollama_model']
+            analyzer.OLLAMA_API_URL = app_settings.get('ollama_api_url', '') # Use get for safety
+            analyzer.DEFAULT_OLLAMA_MODEL = app_settings.get('ollama_model', '') # Use get for safety
             # Note: LOG_LINES_TO_FETCH is passed per function call in analyzer now, not set globally there.
 
             logger.info("Settings loaded and processed successfully.")
             # Update debug log to show the boolean value
-            logger.debug(f"Loaded settings cache (scan_on_startup={app_settings.get('scan_on_startup_bool')}): { {k: (v if k != 'analysis_prompt' else v[:30]+'...') for k,v in app_settings.items()} }")
+            logger.debug(f"Loaded settings cache (scan_on_startup={app_settings.get('scan_on_startup_bool')}, gravatar_email={app_settings.get('gravatar_email')}): { {k: (v if k != 'analysis_prompt' else v[:30]+'...') for k,v in app_settings.items()} }")
 
     except Exception as e:
         logger.exception("CRITICAL: Failed to load settings from database! Application might not function correctly.")
@@ -262,9 +293,10 @@ def load_settings():
                  app_settings['ignored_containers_textarea'] = ""
                  analyzer.OLLAMA_API_URL = app_settings['ollama_api_url']
                  analyzer.DEFAULT_OLLAMA_MODEL = app_settings['ollama_model']
-                 # Add default for scan_on_startup_bool in fallback too
+                 # Add defaults for new settings in fallback too
                  app_settings['scan_on_startup'] = 'false'
                  app_settings['scan_on_startup_bool'] = False
+                 app_settings['gravatar_email'] = ''
              except Exception as fallback_e:
                   logger.error(f"Error processing fallback default settings: {fallback_e}")
 
@@ -280,7 +312,7 @@ def populate_initial_statuses():
     # --- Get Ignored List ---
     ignored_list = []
     try:
-        with settings_lock:
+        with settings_lock: # Need lock to access app_settings
              ignored_list = app_settings.get('ignored_containers_list', [])
              if not isinstance(ignored_list, list): ignored_list = []
     except Exception as e:
@@ -391,7 +423,7 @@ def scan_docker_logs():
 
     # --- Get settings and current container list safely ---
     try:
-        with settings_lock:
+        with settings_lock: # Need lock to read app_settings
             # Copy settings needed for this run to avoid holding lock during long operations
             settings_for_scan = {
                 'ollama_model': app_settings.get('ollama_model'),
@@ -770,7 +802,7 @@ def update_ai_health_summary():
     try:
         # --- Get Settings ---
         settings_local = {}
-        with settings_lock:
+        with settings_lock: # Need lock to access app_settings
             # Copy required settings
             settings_local = {
                 'summary_interval_hours': app_settings.get('summary_interval_hours', 12),
@@ -815,7 +847,7 @@ def update_ai_health_summary():
             final_summary = f"No unresolved issues detected in the last {summary_hours} hours. System appears stable."
             status_for_db = 'success' # Treat as success, just nothing to report
             logger.info("No unresolved issues; using standard 'stable' summary.")
-            analysis_error_msg = None # Ensure no error msg in this case
+            final_error = None # Ensure no error msg in this case
         else:
             formatted_issue_summaries = []
             for issue in limited_issues:
@@ -882,32 +914,39 @@ Health Summary (mentioning affected containers):"""
     finally:
         # --- Update Global Cache ---
         try:
-            # Use app context if needed, but direct access might work in background task
-            with app.ai_summary_lock: # Assuming lock is accessible globally or via app
-                if final_error:
-                    app.ai_health_summary['summary'] = "Error generating health summary."
-                    app.ai_health_summary['error'] = final_error
-                else:
-                    app.ai_health_summary['summary'] = final_summary
-                    app.ai_health_summary['error'] = None
-                app.ai_health_summary['last_updated'] = summary_start_time
+            # Access cache via app object (safer in background task)
+            ai_summary_cache = getattr(app, 'ai_health_summary', None)
+            ai_summary_cache_lock = getattr(app, 'ai_summary_lock', None)
+
+            if ai_summary_cache is not None and ai_summary_cache_lock is not None:
+                 with ai_summary_cache_lock:
+                    if final_error:
+                        ai_summary_cache['summary'] = "Error generating health summary."
+                        ai_summary_cache['error'] = final_error
+                    else:
+                        ai_summary_cache['summary'] = final_summary
+                        ai_summary_cache['error'] = None
+                    ai_summary_cache['last_updated'] = summary_start_time
+            else:
+                 logger.error("Failed to update AI summary cache: state object or lock not found on app context.")
+
         except Exception as cache_err:
             logger.exception(f"Failed to update AI summary cache: {cache_err}")
 
         # --- Save to DB History ---
-            try:
-                if hasattr(db, 'add_summary_history'):
-                    # Call function without the status argument
-                    db.add_summary_history(
-                        timestamp=summary_start_time,
-                        summary_text=final_summary if status_for_db == 'success' else None,
-                        error_text=final_error if status_for_db != 'success' else None
-                        # Removed status=status_for_db argument
-                    )
-                else:
-                    logger.error("Cannot save summary history: db.add_summary_history function not found.")
-            except Exception as history_save_err:
-                 logger.exception(f"Failed to save summary result to history database: {history_save_err}")
+        try:
+            if hasattr(db, 'add_summary_history'):
+                # Call function without the status argument
+                db.add_summary_history(
+                    timestamp=summary_start_time,
+                    summary_text=final_summary if status_for_db == 'success' else None,
+                    error_text=final_error if status_for_db != 'success' else None
+                    # Removed status=status_for_db argument
+                )
+            else:
+                logger.error("Cannot save summary history: db.add_summary_history function not found.")
+        except Exception as history_save_err:
+             logger.exception(f"Failed to save summary result to history database: {history_save_err}")
 
     logger.info("AI health summary update finished.")
 # <<< END REPLACEMENT: update_ai_health_summary FUNCTION (Optimized + History Save) >>>
@@ -978,50 +1017,59 @@ if __name__ == '__main__':
     # Get initial container statuses
     populate_initial_statuses() # Populates container_statuses cache
 
-    # --- Schedule Background Tasks ---
+    # --- START REPLACEMENT: Schedule Background Tasks ---
     scan_interval_minutes = 5 # Default fallback
     summary_interval_hours = 12 # Default fallback
+    scan_on_startup = False # Default fallback
     try:
-        with settings_lock:
-             # Use .get for safety, default to strings before conversion
-             scan_interval_str = app_settings.get('scan_interval_minutes', '5')
-             summary_interval_str = app_settings.get('summary_interval_hours', '12')
-             # Convert safely
-             try: scan_interval_minutes = int(scan_interval_str)
-             except: scan_interval_minutes = 5
-             try: summary_interval_hours = int(summary_interval_str)
-             except: summary_interval_hours = 12
+        with settings_lock: # Need lock to access app_settings
+             # Use .get for safety, default to values before potential int conversion
+             scan_interval_val = app_settings.get('scan_interval_minutes', 5)
+             summary_interval_val = app_settings.get('summary_interval_hours', 12)
+             scan_on_startup = app_settings.get('scan_on_startup_bool', False)
+
+             # Convert safely (ensure they are integers)
+             try: scan_interval_minutes = int(scan_interval_val)
+             except (ValueError, TypeError): scan_interval_minutes = 5
+             try: summary_interval_hours = int(summary_interval_val)
+             except (ValueError, TypeError): summary_interval_hours = 12
 
              # Ensure positive intervals
              if scan_interval_minutes <= 0:
-                 logger.warning(f"Scan interval ({scan_interval_str}) invalid, using 5 minutes.")
+                 logger.warning(f"Scan interval ({scan_interval_val}) invalid, using 5 minutes.")
                  scan_interval_minutes = 5
              if summary_interval_hours <= 0:
-                 logger.warning(f"Summary interval ({summary_interval_str}) invalid, using 12 hours.")
+                 logger.warning(f"Summary interval ({summary_interval_val}) invalid, using 12 hours.")
                  summary_interval_hours = 12
 
         # Get current time in scheduler's timezone
         scheduler_tz = scheduler.timezone
         now_local = datetime.now(scheduler_tz)
 
-        # Add Scan Job
-        # Delay first run slightly to ensure app is fully up
-        first_scan_delay_seconds = 15 # Use a slightly longer default delay
-        first_scan_time = now_local + timedelta(seconds=first_scan_delay_seconds)
+        # --- Determine First Scan Time based on Setting ---
+        if scan_on_startup:
+            first_scan_delay_seconds = 15 # Short delay if scanning on startup
+            first_scan_time = now_local + timedelta(seconds=first_scan_delay_seconds)
+            logger.info(f"Scan on startup ENABLED. First recurring scan scheduled in ~{first_scan_delay_seconds} seconds.")
+        else:
+            first_scan_time = now_local + timedelta(minutes=scan_interval_minutes) # Full interval delay
+            logger.info(f"Scan on startup DISABLED. First recurring scan scheduled in ~{scan_interval_minutes} minutes.")
+        # --- END Determine First Scan Time ---
+
+        # Add Scan Job (RECURRING) - Use the calculated first_scan_time
         scheduler.add_job(
             scan_docker_logs,
             trigger=IntervalTrigger(minutes=scan_interval_minutes),
             id='docker_log_scan_job',
             name='Docker Log Scan',
             replace_existing=True,
-            next_run_time=first_scan_time, # Start slightly delayed
-            max_instances=1, # Prevent multiple scans running concurrently if one overruns
-            misfire_grace_time=60 # Allow 1 minute grace period if scheduler is busy
+            next_run_time=first_scan_time, # <<< Use calculated time
+            max_instances=1,
+            misfire_grace_time=60
         )
-        logger.info(f"Scheduled Docker log scan to run every {scan_interval_minutes} minutes.") # Removed start time from log
+        logger.info(f"Scheduled Docker log scan to run every {scan_interval_minutes} minutes, starting around {first_scan_time.strftime('%Y-%m-%d %H:%M:%S %Z')}.")
 
-        # Add Summary Job
-        # Delay first summary slightly more
+        # Add Summary Job (RECURRING) - Keep its short delay independent
         first_summary_delay_minutes = 2
         first_summary_time = now_local + timedelta(minutes=first_summary_delay_minutes)
         scheduler.add_job(
@@ -1030,58 +1078,37 @@ if __name__ == '__main__':
             id='ai_summary_job',
             name='AI Health Summary Update',
             replace_existing=True,
-            next_run_time=first_summary_time, # Start slightly delayed
+            next_run_time=first_summary_time, # Start summary job relatively soon
             max_instances=1,
-            misfire_grace_time=300 # Allow 5 minutes grace period
+            misfire_grace_time=300
         )
-        logger.info(f"Scheduled AI health summary update to run every {summary_interval_hours} hours.") # Removed start time from log
+        logger.info(f"Scheduled AI health summary update to run every {summary_interval_hours} hours, starting around {first_summary_time.strftime('%Y-%m-%d %H:%M:%S %Z')}.")
 
         # Start the scheduler
         scheduler.start()
         logger.info("APScheduler started.")
 
-        # --- START: Conditional Initial Scan ---
-        # Check the boolean setting loaded earlier
-        # Safely get the boolean value, default to False if key or boolean version is missing
-        scan_on_startup_enabled = app_settings.get('scan_on_startup_bool', False)
-        if scan_on_startup_enabled:
-            try:
-                run_initial_scan_delay = 10 # seconds (can be shorter than the first *recurring* scan delay)
-                initial_scan_run_time = datetime.now(get_display_timezone()) + timedelta(seconds=run_initial_scan_delay)
-                scheduler.add_job(
-                    scan_docker_logs,
-                    trigger='date', # Run once
-                    run_date=initial_scan_run_time,
-                    id='initial_scan_job',
-                    name='Initial Docker Log Scan',
-                    replace_existing=True,
-                    max_instances=1, # Ensure it doesn't clash with recurring if delay is very short
-                    misfire_grace_time=None # Don't reschedule if missed
-                )
-                logger.info(f"Scan on startup ENABLED. Scheduled initial log scan in {run_initial_scan_delay} seconds at {initial_scan_run_time.strftime('%Y-%m-%d %H:%M:%S %Z')}.")
-            except Exception as initial_scan_err:
-                 logger.error(f"Failed to schedule initial scan job: {initial_scan_err}")
-        else:
-            logger.info("Scan on startup DISABLED by setting.")
-        # --- END: Conditional Initial Scan ---
+        # --- REMOVE THE SEPARATE trigger='date' INITIAL SCAN JOB ---
+        # The logic is now handled by the next_run_time of the recurring job
+        # logger.info("Initial scan scheduling logic integrated into recurring job.") # Optional log
 
-        # Update initial scan_status message logic remains
+        # Initial status update for scan job
         with scan_status_lock:
             job = scheduler.get_job('docker_log_scan_job')
             if job and job.next_run_time:
                  scan_status['next_run_time'] = job.next_run_time
-                 scan_status['last_run_status'] = "Scheduler started, first scan pending."
+                 scan_status['last_run_status'] = "Scheduler started, first scan scheduled."
             else:
                  scan_status['last_run_status'] = "Scheduler started, but scan job not found?!"
 
 
     except Exception as e:
         logger.exception("Failed to schedule background tasks!")
-        # Decide if this is critical - perhaps the app can run without scheduling?
-        # For now, we log the error and continue. User can trigger manually via UI/API.
         if scheduler and scheduler.running:
              logger.info("Attempting to shutdown scheduler due to setup error.")
              scheduler.shutdown(wait=False)
+
+    # --- END REPLACEMENT ---
 
     # --- Run Flask App ---
     # Use Waitress for production, Flask dev server for debug
@@ -1109,3 +1136,5 @@ if __name__ == '__main__':
          app.run(host='0.0.0.0', port=PORT, debug=flask_debug, use_reloader=False) # use_reloader=False is crucial
 
     logger.info("--- Geordi Log Monitor Stopped ---")
+
+# <<< Ensure the rest of the file (functions like fetch_initial_ollama_models, load_settings, etc.) remain above this block >>>

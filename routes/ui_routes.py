@@ -10,6 +10,8 @@ import json # For settings processing
 import secrets # For API key generation in regenerate route
 import docker # Import docker library for logs route errors
 import pytz # Import pytz if get_display_timezone uses it
+# <<< Add email validation helper (optional but good) >>>
+import re
 
 # Import local modules needed
 import db
@@ -29,6 +31,10 @@ logger = logging.getLogger(__name__)
 # Define the Blueprint for UI routes
 # Assuming templates are in ../templates relative to where app.py is run
 ui_bp = Blueprint('ui', __name__, template_folder='../templates', static_folder='../static')
+
+# --- Optional: Simple Email Regex ---
+# Very basic check, assumes type="email" in HTML does most work
+EMAIL_REGEX = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
 
 # --- UI Route Definitions ---
 
@@ -312,10 +318,18 @@ def settings():
             form_data = request.form.to_dict() # Gets regular form fields
             new_settings = {}
             validation_errors = []
-            # Define expected keys *including* the new one, *excluding* api_key
+            # --- START: Define expected keys including gravatar_email ---
             expected_keys = [k for k in db.DEFAULT_SETTINGS.keys() if k != 'api_key']
-            # Add scan_on_startup if it's not in defaults (it should be now)
-            if 'scan_on_startup' not in expected_keys: expected_keys.append('scan_on_startup')
+            # Ensure new keys from defaults are included if db hasn't been updated yet
+            # (Assuming db.py DEFAULT_SETTINGS has been updated)
+            if 'scan_on_startup' not in expected_keys:
+                expected_keys.append('scan_on_startup')
+                logging.warning("Adding 'scan_on_startup' to expected keys (missing from db.DEFAULT_SETTINGS?)")
+            if 'gravatar_email' not in expected_keys:
+                expected_keys.append('gravatar_email')
+                logging.warning("Adding 'gravatar_email' to expected keys (missing from db.DEFAULT_SETTINGS?)")
+            # --- END: Define expected keys ---
+
 
             # --- Validation Loop ---
             for key in expected_keys:
@@ -324,7 +338,20 @@ def settings():
                     # Checkbox value is 'true' if checked, otherwise key is absent in form_data
                     value = 'true' if key in form_data else 'false'
                     new_settings[key] = value # Store 'true' or 'false' string
+                    continue # Skip to next key
                 # --- END: Handle scan_on_startup checkbox ---
+
+                # --- START: Handle gravatar_email ---
+                elif key == 'gravatar_email':
+                     value = form_data.get(key, '').strip()
+                     # Optional validation: check if it's not empty and looks like an email
+                     if value and not re.match(EMAIL_REGEX, value):
+                         validation_errors.append("Invalid format for Gravatar Email.")
+                     else:
+                         new_settings[key] = value # Store empty string or valid-looking email
+                     continue # Skip to next key
+                # --- END: Handle gravatar_email ---
+
                 # Handle ignored containers list (multi-select)
                 elif key == 'ignored_containers':
                     ignored_list = request.form.getlist('ignored_containers') # Use getlist here
@@ -334,7 +361,9 @@ def settings():
                         form_data['ignored_containers_textarea'] = "\n".join(ignored_list) # Keep for potential error re-render consistency
                     except Exception as e:
                         validation_errors.append(f"Error processing ignore list: {e}")
-                # Handle other keys
+                    continue # Skip to next key
+
+                # Handle other keys (numeric, color, text etc.)
                 else:
                     value = form_data.get(key, '').strip() # Use get() with default
 
@@ -350,7 +379,7 @@ def settings():
                                      # Compare new string value with cached INT value (needs cast)
                                      if key in restart_required_settings and str(app_settings_local.get(key)) != str(int_val):
                                           needs_restart_msg = True
-                             except (AttributeError, ValueError, KeyError) as check_err:
+                             except (AttributeError, ValueError, KeyError, threading.ThreadError) as check_err: # Added ThreadError
                                   logging.error(f"Could not check restart status for {key}: {check_err}")
                          except ValueError:
                              validation_errors.append(f"Invalid positive integer required for '{key.replace('_', ' ').title()}'.")
@@ -374,7 +403,7 @@ def settings():
                     elif key == 'analysis_prompt':
                          if not value: validation_errors.append("Analysis Prompt cannot be empty.")
                          else: new_settings[key] = value
-                    # No explicit handling for api_key here
+                    # Add other specific validations if needed
 
             # --- Handle Validation Results ---
             if validation_errors:
@@ -416,7 +445,8 @@ def settings():
                     # --- Override display settings with submitted form data ---
                     # Use form_data for most fields
                     for key, value in form_data.items():
-                         if key in current_display_settings or key == 'ignored_containers_textarea' or key == 'ollama_model_manual':
+                         # Ensure we only update keys that are expected settings or helper fields
+                         if key in expected_keys or key in ['ignored_containers_textarea', 'ollama_model_manual']:
                               current_display_settings[key] = value
 
                     # Explicitly handle scan_on_startup boolean for re-render based on form presence
@@ -431,6 +461,9 @@ def settings():
                     # Get the submitted ignored list for the multi-select state
                     submitted_ignored_list = request.form.getlist('ignored_containers')
                     submitted_ignored_list = [name for name in submitted_ignored_list if name]
+
+                    # --- Ensure gravatar_email uses submitted value on re-render ---
+                    current_display_settings['gravatar_email'] = form_data.get('gravatar_email', '')
 
                     return render_template('settings.html',
                                            settings=current_display_settings, # Pass merged form/saved data
@@ -471,21 +504,23 @@ def settings():
                                  except (json.JSONDecodeError, TypeError): changed = True
                              # Compare string values directly for others (including 'true'/'false' for scan_on_startup)
                              else:
-                                 changed = str(current_value_in_cache) != str(value)
+                                 # Special check for gravatar_email allowing empty string
+                                 if key == 'gravatar_email':
+                                     changed = str(current_value_in_cache) != str(value)
+                                 else:
+                                     # Compare strings, default to changed if cache value is None/missing
+                                     changed = str(current_value_in_cache) != str(value) if current_value_in_cache is not None else True
 
                              if changed:
                                   logging.info(f"Attempting to save core setting: {key} = {value[:50] if isinstance(value, str) else value}...")
                                   if db.set_setting(key, value):
                                        app_settings_ref[key] = value # Update cache (stores string)
 
-                                       # --- ADD: Update boolean cache value for scan_on_startup ---
+                                       # --- Update derived cache values ---
                                        if key == 'scan_on_startup':
                                             app_settings_ref['scan_on_startup_bool'] = (value == 'true')
                                             logging.debug(f"Updated scan_on_startup_bool in cache to: {app_settings_ref['scan_on_startup_bool']}")
-                                       # --- END ADD ---
-
-                                       # Update other derived/parsed values in cache
-                                       if key == 'ignored_containers':
+                                       elif key == 'ignored_containers':
                                            try:
                                                parsed_list = json.loads(value)
                                                app_settings_ref['ignored_containers_list'] = parsed_list
@@ -494,21 +529,26 @@ def settings():
                                                logging.error(f"Error parsing saved ignored_containers JSON: {parse_err}")
                                                app_settings_ref['ignored_containers_list'] = []
                                                app_settings_ref['ignored_containers_textarea'] = ""
-                                       if key in ['scan_interval_minutes','summary_interval_hours','log_lines_to_fetch']:
+                                       elif key in ['scan_interval_minutes','summary_interval_hours','log_lines_to_fetch']:
                                            try:
                                                app_settings_ref[key] = int(value) # Store as int in cache
                                            except (ValueError, TypeError):
                                                logging.warning(f"Failed to cast {key} to int for cache, storing as string.")
                                                # Keep string value in cache if int cast fails post-DB save
+                                       # --- gravatar_email does not need derived values ---
 
-                                       # Propagate relevant settings to analyzer
+                                       # Propagate relevant settings to analyzer (not needed for gravatar)
                                        if analyzer_instance:
                                             try:
                                                  if key == 'ollama_api_url': analyzer_instance.OLLAMA_API_URL = value
                                                  if key == 'ollama_model': analyzer_instance.DEFAULT_OLLAMA_MODEL = value
-                                                 logging.debug(f"Propagated setting '{key}' to analyzer module.")
+                                                 # Only log if it's a relevant key
+                                                 if key in ['ollama_api_url', 'ollama_model']:
+                                                      logging.debug(f"Propagated setting '{key}' to analyzer module.")
                                             except Exception as prop_err: logging.error(f"Error propagating setting '{key}' to analyzer: {prop_err}")
-                                       else: logging.warning("Analyzer instance not found, cannot propagate settings.")
+                                       elif key in ['ollama_api_url', 'ollama_model']:
+                                            # Log warning only if propagation was actually needed
+                                            logging.warning("Analyzer instance not found, cannot propagate settings.")
                                   else: # db save failed
                                       logging.error(f"Database save failed for setting: {key}")
                                       save_success = False; failed_key = key; break # Stop saving on first failure
@@ -520,7 +560,7 @@ def settings():
                      if needs_restart_msg:
                           flash("Interval changes require an application restart to take effect.", 'warning')
                  else:
-                     flash(f"Failed to save setting '{failed_key}' to the database. Check logs.", 'error')
+                     flash(f"Failed to save setting '{failed_key or 'N/A'}' to the database. Check logs.", 'error') # Handle failed_key potentially being None
 
                  return redirect(url_for('ui.settings')) # Redirect back after POST
 
@@ -546,11 +586,17 @@ def settings():
                     if 'scan_on_startup_bool' not in current_settings_display:
                          current_settings_display['scan_on_startup_bool'] = current_settings_display.get('scan_on_startup', 'false').lower() == 'true'
                          logging.debug(f"SETTINGS GET: Added derived scan_on_startup_bool: {current_settings_display['scan_on_startup_bool']}")
+                    # --- Ensure gravatar_email exists (even if empty) ---
+                    if 'gravatar_email' not in current_settings_display:
+                        current_settings_display['gravatar_email'] = '' # Add empty string if missing entirely
                 logging.debug("SETTINGS GET: Settings fetched.")
             else:
                 logging.error("SETTINGS GET: Settings lock missing!")
-                # Provide default if lock is missing
+                # Provide defaults if lock is missing
+                current_settings_display = db.DEFAULT_SETTINGS.copy() # Start with defaults
                 current_settings_display['scan_on_startup_bool'] = False
+                current_settings_display['gravatar_email'] = ''
+
 
             # Fetch container names
             if container_lock_local:
@@ -580,7 +626,7 @@ def settings():
             logging.info(f"SETTINGS GET: Preparing to render template...")
 
             return render_template('settings.html',
-                                   settings=current_settings_display, # Pass updated settings dict
+                                   settings=current_settings_display, # Pass updated settings dict (includes gravatar_email)
                                    available_models=current_models_display,
                                    all_container_names=all_names_display,
                                    ignored_container_list=ignored_list_display

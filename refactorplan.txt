@@ -1,0 +1,119 @@
+Refactoring Plan for app.py
+
+Target Structure (Conceptual):
+
+/geordi-log-monitor/
+|
+|-- geordi/                   # Main application package
+|   |-- __init__.py           # Contains the create_app() factory function
+|   |-- config.py             # Configuration loading (from env vars, defaults)
+|   |-- models.py             # (Optional) If using ORM later, or for data classes
+|   |-- state.py              # (Optional) Centralized state management (dicts, locks)
+|   |-- extensions.py         # Setup extensions like scheduler
+|   |
+|   |-- routes/               # Blueprints (UI, API, Scheduler) - Keep as is
+|   |   |-- __init__.py
+|   |   |-- ui_routes.py
+|   |   |-- api_routes.py
+|   |   |-- scheduler_routes.py
+|   |
+|   |-- services/             # <<< NEW: Business logic layer >>>
+|   |   |-- __init__.py
+|   |   |-- scanner_service.py  # Logic from scan_docker_logs
+|   |   |-- summary_service.py  # Logic from update_ai_health_summary
+|   |   |-- docker_service.py   # (Optional refinement) Docker-specific interactions
+|   |   |-- ollama_service.py   # (Optional refinement) Ollama-specific interactions
+|   |
+|   |-- tasks/                # <<< NEW: Background task definitions >>>
+|   |   |-- __init__.py
+|   |   |-- background_tasks.py # scan_docker_logs, update_ai_health_summary wrappers
+|   |
+|   |-- static/               # Static files (Keep as is)
+|   |-- templates/            # Templates (Keep as is)
+|   |-- utils.py              # Utility functions (Keep as is)
+|   |-- db.py                 # Database interactions (Keep as is, maybe rename?)
+|   |-- analyzer.py           # (Could be refactored into docker/ollama services)
+|
+|-- run.py                    # <<< NEW: Script to run the development server >>>
+|-- wsgi.py                   # <<< NEW: Entry point for production servers (like Waitress/Gunicorn) >>>
+|-- requirements.txt
+|-- Dockerfile                # Will need updating for new structure/entry point
+|-- docker-compose.yml        # May need updating for entry point
+|-- data/                     # Persistent data (DB)
+|-- .env
+|-- .dockerignore
+|-- app.log
+
+
+Refactoring Plan (Incremental Steps):
+
+**Phase 1: Basic Structure & Factory Pattern**
+
+1.  **Create Package Structure:**
+    *   Create a `geordi/` directory.
+    *   Move `app.py`, `routes/`, `static/`, `templates/`, `utils.py`, `db.py`, `analyzer.py` into the `geordi/` directory.
+    *   Create empty `__init__.py` files in `geordi/` and `geordi/routes/`.
+    *   Rename the original `app.py` inside `geordi/` to `__init__.py` (this will become the factory).
+    *   Create `run.py` and `wsgi.py` in the project root (outside `geordi/`).
+2.  **Implement `create_app` Factory (`geordi/__init__.py`):**
+    *   Define a function `create_app(config_object='geordi.config.Config')`.
+    *   Move Flask app initialization (`app = Flask(__name__)`) inside `create_app`.
+    *   Move configuration loading (reading `FLASK_SECRET_KEY`, potentially other env vars) into a separate `geordi/config.py` file and load it using `app.config.from_object()`.
+    *   Move Jinja filter/global setup (`nl2br`, `generate_gravatar_url`, context processor) inside `create_app`.
+    *   Move blueprint registration (`app.register_blueprint`) inside `create_app`, updating import paths (e.g., `from .routes.ui_routes import ui_bp`).
+    *   **Crucially:** Move the definition and initialization of global state variables (`container_statuses`, `app_settings`, locks, etc.) and the attachment logic (`app.container_statuses = ...`) *inside* `create_app`.
+    *   Move the initialization calls (`db.init_db()`, `load_settings()`, `fetch_initial_ollama_models()`, `populate_initial_statuses()`) *inside* `create_app` (after config/state init).
+    *   Move scheduler setup (`scheduler = ...`, `app.scheduler = ...`) into `create_app` or a helper function called by it (maybe `geordi/extensions.py`).
+    *   The `create_app` function should finally `return app`.
+3.  **Create Entry Points:**
+    *   **`run.py`:** Imports `create_app` from `geordi`, calls it, and runs the Flask development server (`app.run(...)`).
+    *   **`wsgi.py`:** Imports `create_app`, calls it, exposing the `app` object for WSGI servers like Waitress/Gunicorn.
+    *   Update `Dockerfile`/`docker-compose.yml` to use `wsgi.py` (for Waitress) or `run.py` (if sticking with dev server temporarily).
+
+*Benefit:* Standard Flask structure, better config management, easier testing setup. `geordi/__init__.py` is smaller but still busy.
+
+**Phase 2: Extract Background Tasks & Services**
+
+4.  **Create `tasks/background_tasks.py`:**
+    *   Move the *definitions* of `scan_docker_logs` and `update_ai_health_summary` from `geordi/__init__.py` to this new file.
+    *   These functions will still need access to the app context (`current_app`) to get settings, state, locks, and call services.
+    *   Update the scheduler setup in `geordi/__init__.py` (or `extensions.py`) to import and schedule tasks from `geordi.tasks.background_tasks`.
+    *   Attach the task functions (`app.scan_docker_logs_task = ...`) inside `create_app`.
+5.  **Create `services/scanner_service.py`:**
+    *   Define functions like `perform_scan()`, `process_container_logs()`, `update_container_state()`.
+    *   Move the core logic *from* `tasks.background_tasks.scan_docker_logs` into these service functions. This includes:
+        *   Listing containers (potentially move to `docker_service`).
+        *   Fetching logs (`analyzer.fetch_container_logs` or `docker_service`).
+        *   Calling analysis (`analyzer.analyze_logs_with_ollama` or `ollama_service`).
+        *   Interacting with the DB (`db.add_or_update_abnormality`, etc.).
+    *   The service functions should receive necessary config/data (e.g., container ID, settings snapshot) as arguments. They should *not* directly access `current_app` or global state if possible. They return results or raise exceptions.
+    *   Modify `tasks.background_tasks.scan_docker_logs` to be a thin wrapper: get settings/state from `current_app`, call the service function(s) with necessary arguments, handle exceptions, update global scan status.
+6.  **Create `services/summary_service.py`:**
+    *   Define functions like `generate_summary()`.
+    *   Move the core logic *from* `tasks.background_tasks.update_ai_health_summary` into this service. This includes:
+        *   Fetching recent abnormalities (`db.get_recent_abnormalities`).
+        *   Filtering/formatting data.
+        *   Calling the summarization endpoint (`analyzer.summarize_recent_abnormalities` or `ollama_service`).
+    *   Modify `tasks.background_tasks.update_ai_health_summary` to be a thin wrapper: get settings, call the service, handle results/errors, update global summary state, save to history DB.
+7.  **(Optional) Refactor `analyzer.py`:**
+    *   Create `services/docker_service.py` and move `get_docker_client`, `fetch_container_logs` there.
+    *   Create `services/ollama_service.py` and move `get_ollama_models`, `analyze_logs_with_ollama`, `summarize_recent_abnormalities` there.
+    *   The `scanner_service` and `summary_service` would then import and use these more granular services instead of `analyzer.py`.
+
+*Benefit:* Core logic separated and potentially testable. `geordi/__init__.py` is much cleaner. Tasks are just orchestrators. Clear separation of concerns.
+
+**Phase 3: Refine State Management (Optional)**
+
+8.  **Create `state.py`:**
+    *   Define the state dictionaries (`container_statuses`, `app_settings`, etc.) and their locks in this module.
+    *   Provide functions within `state.py` to safely get/set values, acquiring locks internally (e.g., `get_container_status(cid)`, `update_all_container_statuses(new_statuses)`, `get_setting(key)`).
+    *   Modify tasks and potentially services to import and use these state management functions instead of accessing `current_app.xxx_lock` and `current_app.xxx` directly.
+    *   The `app_settings` cache might still be best managed via the context processor for template access.
+
+*Benefit:* Centralized state logic, potentially cleaner access patterns, easier to reason about locking.
+
+**Recommendation:**
+
+Start with **Phase 1**. Getting the Application Factory set up is fundamental. Then move to **Phase 2**, focusing on extracting the logic from `scan_docker_logs` and `update_ai_health_summary` into their respective service modules. This provides the biggest immediate benefit for maintainability. Phase 3 is optional and can be done later if state management still feels messy.
+
+This is a significant refactoring effort, so proceed carefully, one step at a time, testing frequently!

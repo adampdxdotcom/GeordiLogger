@@ -55,7 +55,8 @@ Analysis Result:""",
     "summary_interval_hours": str(os.environ.get("SUMMARY_INTERVAL_HOURS", "12")),
     "log_lines_to_fetch": str(os.environ.get("LOG_LINES_TO_FETCH", "100")),
     "api_key": "", # API Key Setting (default empty = disabled)
-    "scan_on_startup": "false"
+    "scan_on_startup": "false",
+    "gravatar_email": ""
 }
 
 # --- Helper Functions ---
